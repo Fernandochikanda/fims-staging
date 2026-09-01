@@ -26,8 +26,7 @@ import { LangProvider } from "./context/LangContext";
 import { CommsProvider, useComms } from "./context/CommsContext";
 import { getClientTemplate } from "./utils/excelTemplateImporter";
 import { authService } from "./services/authService";
-import { datastore } from "./lib/dataStore";
-
+import { dataStore } from "./lib/dataStore";
 
 // Chaves para localStorage
 const STORAGE_KEYS = {
