@@ -1,4 +1,3 @@
-// /src/services/authService.js
 import { supabase } from '../lib/supabase';
 
 export const authService = {
@@ -12,22 +11,18 @@ export const authService = {
         .limit(1);
 
       if (error) throw error;
-      if (!users || users.length === 0) {
-        return { success: false, error: 'Utilizador não encontrado' };
-      }
+      if (!users || users.length === 0) return { success: false, error: 'User not found' };
 
       const user = users[0];
+      if (user.password !== password) return { success: false, error: 'Wrong password' };
 
-      if (user.password !== password) {
-        return { success: false, error: 'Senha incorreta' };
-      }
-
-      const { password: pwd, ...userData } = user;
-      
       const formattedUser = {
-        ...userData,
-        id: Number(userData.id), 
-        avatar: userData.avatar || userData.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+        id: Number(user.id),
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        active: user.active,
+        avatar: user.avatar || user.name.substring(0, 2).toUpperCase()
       };
 
       localStorage.setItem('fims_current_user', JSON.stringify(formattedUser));
@@ -36,19 +31,16 @@ export const authService = {
       return { success: true, user: formattedUser };
     } catch (err) {
       console.error('Login error:', err);
-      return { success: false, error: err.message || 'Erro no servidor' };
+      return { success: false, error: err.message };
     }
   },
 
   async logout(userId, userName) {
     try {
-      if (userId) {
-        await this.logActivity(userId, userName, 'Logout', 'logout', 'Saiu do sistema');
-      }
+      if (userId) await this.logActivity(userId, userName, 'Logout', 'logout', 'Saiu do sistema');
       localStorage.removeItem('fims_current_user');
       return { success: true };
     } catch (err) {
-      console.error('Logout error:', err);
       return { success: false };
     }
   },
@@ -60,17 +52,16 @@ export const authService = {
 
   async getAllUsers() {
     try {
-      const { data, error } = await supabase
-        .from('fims_users')
-        .select('*')
-        .order('name', { ascending: true });
-
+      const { data, error } = await supabase.from('fims_users').select('*').order('name', { ascending: true });
       if (error) throw error;
-
-      return data.map(u => ({
-        ...u,
+      
+      return (data || []).map(u => ({
         id: Number(u.id),
-        avatar: u.avatar || u.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        active: u.active,
+        avatar: u.avatar || u.name.substring(0, 2).toUpperCase()
       }));
     } catch (err) {
       console.error('Error fetching users:', err);
@@ -80,17 +71,13 @@ export const authService = {
 
   async logActivity(userId, userName, action, type, detail) {
     try {
-      const { error } = await supabase
-        .from('fims_logs')
-        .insert([{
-          user_id: userId,
-          user_name: userName,
-          action: action,
-          type: type,
-          detail: detail
-        }]);
-
-      if (error) throw error;
+      await supabase.from('fims_logs').insert([{
+        user_id: Number(userId) || null,
+        user_name: userName,
+        action: action,
+        type: type,
+        detail: detail
+      }]);
     } catch (err) {
       console.error('Error saving log:', err);
     }
