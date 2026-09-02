@@ -185,6 +185,7 @@ function AppContent() {
     async function loadData() {
       try {
         const dbUsers = await authService.getAllUsers();
+        console.log("USERS FROM SUPABASE:", dbUsers);
         setUsers(dbUsers.length > 0 ? dbUsers : SEED_USERS);
 
         const { data: supabaseInspections, error } = await supabase.from('fims_inspections').select('*');
