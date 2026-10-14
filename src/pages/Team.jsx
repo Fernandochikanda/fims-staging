@@ -1,3 +1,4 @@
+// /src/pages/Team.jsx
 import { useState } from "react";
 import { ROLES } from "../data/constants";
 import ScoreRing from "../components/ScoreRing";
@@ -16,10 +17,17 @@ export default function Team({ users, inspections }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "16px" }}>
         {inspectors.map(insp => {
-          const myInspections = inspections.filter(i => i.inspector_id === insp.id && i.type !== "leave");
+          // CORREÇÃO: Compara por ID (convertido para String) OU por Nome
+          const myInspections = inspections.filter(i => {
+            if (i.type === "leave") return false;
+            if (String(i.inspector_id) === String(insp.id)) return true;
+            if (i.inspector_name && insp.name && i.inspector_name.trim().toLowerCase() === insp.name.trim().toLowerCase()) return true;
+            return false;
+          });
+          
           const completed = myInspections.filter(i => i.score_pct !== null);
           const avgScore = completed.length ? Math.round(completed.reduce((s, i) => s + i.score_pct, 0) / completed.length) : 0;
-          const pending = myInspections.filter(i => i.status === "pending" || i.status === "in_progress").length;
+          const pending = myInspections.filter(i => i.status === "pending" || i.status === "in_progress" || i.status === "pending_acceptance").length;
           const alerts = myInspections.filter(i => i.alert_level === "critical" || i.alert_level === "warning").length;
           const declines = myInspections.filter(i => i.accepted === false).length;
           
@@ -78,7 +86,14 @@ export default function Team({ users, inspections }) {
 }
 
 function InspectorProfileModal({ inspector, inspections, onClose }) {
-  const myInspections = inspections.filter(i => i.inspector_id === inspector.id && i.type !== "leave");
+  // CORREÇÃO: Compara por ID (convertido para String) OU por Nome
+  const myInspections = inspections.filter(i => {
+    if (i.type === "leave") return false;
+    if (String(i.inspector_id) === String(inspector.id)) return true;
+    if (i.inspector_name && inspector.name && i.inspector_name.trim().toLowerCase() === inspector.name.trim().toLowerCase()) return true;
+    return false;
+  });
+
   const completed = myInspections.filter(i => i.score_pct !== null);
   const avgScore = completed.length ? Math.round(completed.reduce((s, i) => s + i.score_pct, 0) / completed.length) : 0;
   
