@@ -43,7 +43,7 @@ export const SEED_LOCATIONS = [
   { id: 16, name: "Gestão de Terminais K4", address: "Maputo, Moçambique", supervisor_id: 3 },
   { id: 17, name: "GDA", address: "Maputo, Moçambique", supervisor_id: 3 },
   { id: 18, name: "Hollard Seguros R/C", address: "Maputo, Moçambique", supervisor_id: 3 },
-  { id: 19, name: "Hollard Seguros 4º", address: "Maputo, Moçambique", supervisor_id: 3 },
+  { id: 19, name: "Hollard Seguros 4rd", address: "Maputo, Moçambique", supervisor_id: 3 },
   { id: 20, name: "Intercar KIA", address: "Maputo, Moçambique", supervisor_id: 3 },
   { id: 21, name: "ISCTEM 1", address: "Maputo, Moçambique", supervisor_id: 3 },
   { id: 22, name: "ISCTEM 2", address: "Maputo, Moçambique", supervisor_id: 3 },
@@ -76,7 +76,7 @@ export const SEED_LOCATIONS = [
   { id: 49, name: "Hollard Seguros R/C GA", address: "Maputo, Moçambique", supervisor_id: 3 },
   { id: 50, name: "Hollard Seguros R/C GA 3º Andar", address: "Maputo, Moçambique", supervisor_id: 3 },
   { id: 51, name: "Hollard Seguros R/C GA 4º Andar", address: "Maputo, Moçambique", supervisor_id: 3 },
-  { id: 52, name: "Radisson", address: "Maputo, Moçambique", supervisor_id: 3 },
+  { id: 52, name: "Radisson Novo", address: "Maputo, Moçambique", supervisor_id: 3 },
   { id: 53, name: "Ata Construções", address: "Maputo, Moçambique", supervisor_id: 3 },
   { id: 54, name: "Baia Mall", address: "Maputo, Moçambique", supervisor_id: 3 },
 ];
@@ -107,3 +107,4 @@ export const TOTAL_POSSIBLE = TEMPLATE_SECTIONS.reduce(
   (sum, s) => sum + (s.items ? s.items.reduce((ss, i) => ss + (i.weight || i.max || 1), 0) : 0),
   0
 );
+
