@@ -2,7 +2,7 @@ import { Icon } from "../lib/icons";
 import { ROLES } from "../data/constants";
 import { useLang } from "../context/LangContext";
 
-export default function Sidebar({ currentUser, activePage, onNavigate, alertCount, isOpen, onClose }) {
+export default function Sidebar({ currentUser, activePage, onNavigate, alertCount, notifCount, isOpen, onClose }) {
   const role = currentUser.role;
   const { t } = useLang();
 
@@ -11,7 +11,8 @@ export default function Sidebar({ currentUser, activePage, onNavigate, alertCoun
     { id: "inspections", icon: "clipboard", label: t.inspections, roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR, ROLES.INSPECTOR] },
     { id: "schedule", icon: "chart", label: "Agenda", roles: [ROLES.ADMIN, ROLES.SUPERVISOR] },
     { id: "report_center", icon: "file", label: "Relatórios", roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR] },
-    { id: "messages", icon: "bell", label: "Mensagens", roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR, ROLES.INSPECTOR] },
+    { id: "notifications", icon: "bell", label: "Notificações", badge: notifCount || null, roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR, ROLES.INSPECTOR] },
+    { id: "messages", icon: "mail", label: "Mensagens", roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR, ROLES.INSPECTOR] },
     { id: "field_map", icon: "location", label: "Mapa de Campo", roles: [ROLES.ADMIN, ROLES.SUPERVISOR] },
     { id: "team", icon: "users", label: "Equipa (KPIs)", roles: [ROLES.ADMIN, ROLES.SUPERVISOR] },
     { id: "alerts", icon: "alert", label: t.alerts, badge: alertCount || null, roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR] },

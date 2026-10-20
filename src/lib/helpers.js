@@ -217,7 +217,7 @@ export function getMonthlyTrend(inspections) {
 
 export function getClientRisk(inspections, locations) {
   return locations.map(loc => {
-    const locInsps = inspections.filter(i => i.location_id === loc.id && i.score_pct !== null).sort((a,b) => new Date(b.date) - new Date(a.date));
+    const locInsps = inspections.filter(i => String(i.location_id) === String(loc.id) && i.score_pct !== null).sort((a,b) => new Date(b.date) - new Date(a.date));
     const avg = locInsps.length ? Math.round(locInsps.reduce((s,i) => s + i.score_pct, 0) / locInsps.length) : null;
     let churnRisk = false;
     if (locInsps.length >= 3) {
@@ -230,7 +230,7 @@ export function getClientRisk(inspections, locations) {
 
 export function getTopBottomPerformers(inspections, locations) {
   const stats = locations.map(loc => {
-    const li = inspections.filter(i => i.location_id === loc.id && i.score_pct !== null);
+    const li = inspections.filter(i => String(i.location_id) === String(loc.id) && i.score_pct !== null);
     const avg = li.length ? Math.round(li.reduce((s,i) => s+i.score_pct, 0) / li.length) : 0;
     return { name: loc.name, avg };
   }).filter(l => l.avg > 0);

@@ -11,7 +11,7 @@ export default function MonthlyReport({ inspections, locations }) {
   const criticals = monthInspections.filter(i => i.alert_level === "critical").length;
 
   const customerData = locations.map(loc => {
-    const li = monthInspections.filter(i => i.location_id === loc.id);
+    const li = monthInspections.filter(i => String(i.location_id) === String(loc.id));
     const avg = li.length ? Math.round(li.reduce((s, i) => s + i.score_pct, 0) / li.length) : null;
     const crit = li.filter(i => i.alert_level === "critical").length;
     return { ...loc, count: li.length, avg, crit };

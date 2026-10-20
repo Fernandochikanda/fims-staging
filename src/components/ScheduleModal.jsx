@@ -19,7 +19,7 @@ export default function ScheduleModal({ locations, users, inspections, onClose, 
   const inspectors = users.filter(u => u.role === ROLES.INSPECTOR);
 
   const suggestions = inspectors.map(insp => {
-    const hist = inspections.filter(i => String(i.inspector_id) === String(insp.id) && i.location_id === Number(locId) && i.score_pct);
+    const hist = inspections.filter(i => String(i.inspector_id) === String(insp.id) && String(i.location_id) === String(locId) && i.score_pct);
     const avgScore = hist.length ? Math.round(hist.reduce((s,i)=>s+i.score_pct,0)/hist.length) : 0;
     const conflicts = inspections.filter(i => String(i.inspector_id) === String(insp.id) && i.date === date && i.accepted !== false).length;
     const rating = avgScore >= 90 ? 5 : avgScore >= 80 ? 4 : avgScore >= 70 ? 3 : 2;

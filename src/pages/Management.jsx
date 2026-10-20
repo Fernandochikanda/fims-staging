@@ -245,7 +245,7 @@ export function LocationsPage({ locations, setLocations, users, inspections }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
         {locations.map(loc => {
-          const locInsp = inspections.filter(i => i.location_id === loc.id && i.score_pct !== null);
+          const locInsp = inspections.filter(i => String(i.location_id) === String(loc.id) && i.score_pct !== null);
           const avg = locInsp.length ? Math.round(locInsp.reduce((s, i) => s + i.score_pct, 0) / locInsp.length) : null;
           return (
             <div key={loc.id} className="card">
@@ -280,7 +280,7 @@ export function LocationsPage({ locations, setLocations, users, inspections }) {
 export function ReportsPage({ inspections, locations }) {
   const [filterLoc, setFilterLoc] = useState("all");
   let filtered = inspections.filter(i => i.score_pct !== null);
-  if (filterLoc !== "all") filtered = filtered.filter(i => i.location_id === Number(filterLoc));
+  if (filterLoc !== "all") filtered = filtered.filter(i => String(i.location_id) === String(filterLoc));
   const avgScore = filtered.length ? Math.round(filtered.reduce((s, i) => s + i.score_pct, 0) / filtered.length) : 0;
 
   return (
@@ -298,7 +298,7 @@ export function ReportsPage({ inspections, locations }) {
             <thead><tr><th>Localização</th><th>Nº Inspeções</th><th>Score Médio</th></tr></thead>
             <tbody>
               {locations.map(loc => {
-                const li = filtered.filter(i => i.location_id === loc.id);
+                const li = filtered.filter(i => String(i.location_id) === String(loc.id));
                 if (!li.length) return null;
                 const avg = Math.round(li.reduce((s, i) => s + i.score_pct, 0) / li.length);
                 return <tr key={loc.id}><td style={{ fontWeight: 500 }}>{loc.name}</td><td>{li.length}</td><td><ScoreRing pct={avg} size={36} /></td></tr>;
@@ -500,18 +500,57 @@ export function TemplatesPage() {
 // ============================================================
 // AUDIT PAGE
 // ============================================================
-export function AuditPage({ auditLogs }) {
+export function AuditPage({ auditLogs, users }) {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [monthFilter, setMonthFilter] = useState('');
+
+  // Extrair meses únicos dos logs para o filtro
+  const availableMonths = [...new Set(
+    auditLogs
+      .map(log => {
+        const d = new Date(log.timestamp);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      })
+      .filter(Boolean)
+  )].sort().reverse();
+
+  // Resolver nome do utilizador: tentar match pelo nome, senão mostrar o que está no log
+  const resolveUserName = (logUserName) => {
+    if (!logUserName || logUserName === 'Sistema') return 'Sistema';
+    // Se temos users, verificar se o nome existe na lista actual
+    if (users && users.length > 0) {
+      const match = users.find(u => u.name === logUserName);
+      if (match) return match.name;
+    }
+    // Marcar utilizadores que já não existem
+    return logUserName;
+  };
+
+  // Verificar se utilizador ainda existe
+  const isUserActive = (logUserName) => {
+    if (!logUserName || logUserName === 'Sistema') return true;
+    if (users && users.length > 0) {
+      return users.some(u => u.name === logUserName);
+    }
+    return true;
+  };
 
   let filtered = auditLogs;
   if (filter !== 'all') filtered = filtered.filter(log => log.type === filter);
+  if (monthFilter) {
+    filtered = filtered.filter(log => {
+      const d = new Date(log.timestamp);
+      const logMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      return logMonth === monthFilter;
+    });
+  }
   if (search) {
     const term = search.toLowerCase();
     filtered = filtered.filter(log => 
       log.user.toLowerCase().includes(term) || 
       log.action.toLowerCase().includes(term) ||
-      log.detail.toLowerCase().includes(term)
+      (log.detail || '').toLowerCase().includes(term)
     );
   }
 
@@ -524,6 +563,18 @@ export function AuditPage({ auditLogs }) {
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <input type="text" placeholder="Buscar..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ padding: '6px 12px', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13 }} />
+          <select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} style={{ padding: '6px 12px', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13, background: 'white' }}>
+            <option value="">Todos os meses</option>
+            {availableMonths.map(m => {
+              const [y, mo] = m.split('-');
+              const label = new Date(y, mo - 1).toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
+              const count = auditLogs.filter(log => {
+                const d = new Date(log.timestamp);
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` === m;
+              }).length;
+              return <option key={m} value={m}>{label} ({count})</option>;
+            })}
+          </select>
           <select value={filter} onChange={(e) => setFilter(e.target.value)} style={{ padding: '6px 12px', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13, background: 'white' }}>
             <option value="all">Todos</option>
             <option value="login">Login</option>
@@ -531,6 +582,7 @@ export function AuditPage({ auditLogs }) {
             <option value="schedule">Agendamento</option>
             <option value="notification">Notificações</option>
             <option value="capa_alert">Alertas CAPA</option>
+            <option value="system">Sistema</option>
           </select>
         </div>
       </div>
@@ -548,22 +600,29 @@ export function AuditPage({ auditLogs }) {
           <tbody>
             {filtered.length === 0 && (
               <tr><td colSpan={5} style={{ textAlign: 'center', padding: '30px', color: '#888' }}>
-                {search ? 'Nenhum registo encontrado.' : 'Nenhum registo ainda.'}
+                {search || monthFilter ? 'Nenhum registo encontrado com os filtros aplicados.' : 'Nenhum registo ainda.'}
               </td></tr>
             )}
-            {filtered.map(log => (
-              <tr key={log.id}>
-                <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>{new Date(log.timestamp).toLocaleString('pt-PT')}</td>
-                <td style={{ fontWeight: 500 }}>{log.user}</td>
-                <td>{log.action}</td>
-                <td>
-                  <span className={`badge ${log.type === 'login' ? 'badge-ok' : log.type === 'logout' ? 'badge-closed' : log.type === 'capa_alert' ? 'badge-danger' : 'badge-progress'}`}>
-                    {log.type}
-                  </span>
-                </td>
-                <td style={{ fontSize: 13, color: '#4B5563' }}>{log.detail}</td>
-              </tr>
-            ))}
+            {filtered.map(log => {
+              const userName = resolveUserName(log.user);
+              const userActive = isUserActive(log.user);
+              return (
+                <tr key={log.id}>
+                  <td style={{ whiteSpace: 'nowrap', fontSize: 12 }}>{new Date(log.timestamp).toLocaleString('pt-PT')}</td>
+                  <td style={{ fontWeight: 500 }}>
+                    {userName}
+                    {!userActive && <span style={{ fontSize: 9, color: '#A32D2D', marginLeft: 6, fontWeight: 400 }}>(inactivo)</span>}
+                  </td>
+                  <td>{log.action}</td>
+                  <td>
+                    <span className={`badge ${log.type === 'login' ? 'badge-ok' : log.type === 'logout' ? 'badge-closed' : log.type === 'capa_alert' ? 'badge-danger' : 'badge-progress'}`}>
+                      {log.type}
+                    </span>
+                  </td>
+                  <td style={{ fontSize: 13, color: '#4B5563' }}>{log.detail}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

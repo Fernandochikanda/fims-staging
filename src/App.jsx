@@ -15,6 +15,7 @@ import Schedule from "./pages/Schedule";
 import LiveMap from "./pages/LiveMap";
 import Team from "./pages/Team";
 import Messages from "./pages/Messages";
+import Notifications from "./pages/Notifications";
 import ScheduleModal from "./components/ScheduleModal";
 import RescheduleModal from "./components/RescheduleModal";
 import BulkScheduleModal from "./components/BulkScheduleModal";
@@ -70,7 +71,7 @@ function NewInspectionModal({ locations, users, currentUser, onClose, onCreate }
     const id = e.target.value;
     setLocId(id);
     if (id) {
-      const loc = locations.find(l => l.id === Number(id));
+      const loc = locations.find(l => String(l.id) === String(id));
       setSelectedClient(loc);
     } else {
       setSelectedClient(null);
@@ -78,10 +79,10 @@ function NewInspectionModal({ locations, users, currentUser, onClose, onCreate }
   };
   const handleCreate = () => {
     if (!locId) return;
-    const loc = locations.find(l => l.id === Number(locId));
+    const loc = locations.find(l => String(l.id) === String(locId));
     if (!loc) return;
     
-    const inspector = users.find(u => u.id === Number(inspectorId)) || null;
+    const inspector = users.find(u => String(u.id) === String(inspectorId)) || null;
     const template = getClientTemplate(loc.name);
     const templateSections = template.sections || [];
     
@@ -181,7 +182,7 @@ function NewInspectionModal({ locations, users, currentUser, onClose, onCreate }
 }
 
 function AppContent() {
-  const { notify } = useComms();
+  const { notify, notifications } = useComms();
   
   // --- ESTADO ---
   const [currentUser, setCurrentUser] = useState(null);
@@ -315,6 +316,41 @@ function AppContent() {
     };
   }, [isInitialized, currentUser]);
 
+  // ============================================
+  // SINCRONIZAÇÃO COM SUPABASE - AUDIT LOGS
+  // ============================================
+  useEffect(() => {
+    if (!isInitialized || !currentUser) return;
+    let unsubscribed = false;
+    async function syncAuditLogs() {
+      try {
+        const { dataService } = await import('./services/dataService');
+        const result = await dataService.fetchAuditLogs();
+        if (unsubscribed || !result.success) return;
+
+        console.log(`[App] Recebidos ${result.logs.length} audit logs do Supabase`);
+        // Merge: Supabase logs + local-only logs (not yet synced)
+        setAuditLogs(prev => {
+          const supabaseIds = new Set(result.logs.map(l => String(l.id)));
+          const localOnly = prev.filter(l => !supabaseIds.has(String(l.id)));
+          // Supabase first (most recent), then any local-only entries
+          const merged = [...result.logs, ...localOnly];
+          dataStore.set(STORAGE_KEYS.LOGS, merged);
+          return merged;
+        });
+      } catch (error) {
+        console.error('[App] Erro na sincronização de audit logs:', error);
+      }
+    }
+    syncAuditLogs();
+    // Refresh audit logs every 30 seconds
+    const interval = setInterval(syncAuditLogs, 30000);
+    return () => {
+      unsubscribed = true;
+      clearInterval(interval);
+    };
+  }, [isInitialized, currentUser]);
+
   // --- SALVAR DADOS PESADOS NO INDEXEDDB ---
   useEffect(() => { if (isInitialized) dataStore.set(STORAGE_KEYS.INSPECTIONS, inspections); }, [inspections, isInitialized]);
   useEffect(() => { if (isInitialized) dataStore.set(STORAGE_KEYS.USERS, users); }, [users, isInitialized]);
@@ -334,16 +370,34 @@ function AppContent() {
 
   // --- FUNÇÕES ---
   const alertCount = inspections.filter(i => i.alert_level === "critical" && i.score_pct !== null && !i.resolved).length;
+  const notifCount = notifications.filter(n => currentUser && String(n.userId) === String(currentUser.id) && !n.read).length;
   
   const topBarTitles = {
     dashboard: "Dashboard", inspections: "Inspeções", alerts: "Alertas", reports: "Relatórios",
     users: "Utilizadores", locations: "Localizações", templates: "Templates", audit: "Auditoria", 
     settings: "Configurações", monthly_report: "Relatório Mensal", schedule: "Operations Calendar", 
-    field_map: "Mapa de Campo", team: "Equipa (KPIs)", messages: "Mensagens", report_center: "Centro de Relatórios"
+    field_map: "Mapa de Campo", team: "Equipa (KPIs)", messages: "Mensagens", report_center: "Centro de Relatórios",
+    notifications: "Notificações"
   };
 
   const addAuditLog = (user, action, type, detail) => {
-    setAuditLogs(prev => [{ id: genId(), timestamp: new Date().toISOString(), user: user.name, action, type, detail }, ...prev]);
+    const logEntry = { id: genId(), timestamp: new Date().toISOString(), user: user.name, action, type, detail };
+    setAuditLogs(prev => [logEntry, ...prev]);
+    // Save to Supabase so all users/devices can see it
+    (async () => {
+      try {
+        const { dataService } = await import('./services/dataService');
+        await dataService.saveAuditLog({
+          userId: user.id,
+          userName: user.name,
+          action,
+          type,
+          detail
+        });
+      } catch (e) {
+        console.warn('[App] Failed to save audit log to Supabase:', e);
+      }
+    })();
   };
 
   const handleLogin = (user) => {
@@ -654,6 +708,7 @@ function AppContent() {
         activePage={page} 
         onNavigate={handleNavigate} 
         alertCount={alertCount} 
+        notifCount={notifCount} 
         isOpen={sidebarOpen} 
         onClose={() => setSidebarOpen(false)} 
       />
@@ -759,7 +814,16 @@ function AppContent() {
           ) : page === "templates" ? (
             <TemplatesPage />
           ) : page === "audit" ? (
-            <AuditPage auditLogs={auditLogs} />
+            <AuditPage auditLogs={auditLogs} users={users} />
+          ) : page === "notifications" ? (
+            <Notifications 
+              currentUser={currentUser} 
+              onNavigate={handleNavigate} 
+              inspections={inspections} 
+              onStartInspection={handleStartInspection} 
+              onAcceptTask={handleAcceptTask} 
+              onDeclineTask={handleDeclineTask} 
+            />
           ) : page === "settings" ? (
             <SettingsPage 
               inspections={inspections}

@@ -207,7 +207,7 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
 
   const handleShowRefImage = (itemId) => {
     if (!allInspections) return;
-    const clientInsps = allInspections.filter(i => i.location_id === inspection.location_id && i.id !== inspection.id && i.score_pct !== null);
+    const clientInsps = allInspections.filter(i => String(i.location_id) === String(inspection.location_id) && i.id !== inspection.id && i.score_pct !== null);
     if (clientInsps.length === 0) return alert("No previous inspections found for this client.");
     const lastInsp = clientInsps.sort((a,b) => new Date(b.date) - new Date(a.date))[0];
     photoStore.listByInspection(lastInsp.id).then(grouped => {

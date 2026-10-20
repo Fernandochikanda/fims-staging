@@ -332,5 +332,59 @@ export const dataService = {
     } catch (error) {
       return { success: false, count: 0, error: error.message };
     }
+  },
+
+  async fetchAuditLogs() {
+    try {
+      const { data, error } = await supabase
+        .from('fims_logs')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(500);
+
+      if (error) {
+        console.warn('[dataService] fetchAuditLogs error:', error.message);
+        return { success: false, logs: [] };
+      }
+
+      const logs = (data || []).map(row => ({
+        id: row.id || row.timestamp,
+        timestamp: row.timestamp,
+        user: row.user_name || row.user || 'Sistema',
+        action: row.action || '',
+        type: row.type || 'system',
+        detail: row.detail || ''
+      }));
+
+      console.log(`[dataService] Fetched ${logs.length} audit logs from Supabase`);
+      return { success: true, logs };
+    } catch (error) {
+      console.error('[dataService] fetchAuditLogs exception:', error);
+      return { success: false, logs: [] };
+    }
+  },
+
+  async saveAuditLog({ userId, userName, action, type, detail }) {
+    try {
+      const { error } = await supabase
+        .from('fims_logs')
+        .insert([{
+          user_id: userId,
+          user_name: userName,
+          action,
+          type,
+          detail,
+          timestamp: new Date().toISOString()
+        }]);
+
+      if (error) {
+        console.warn('[dataService] saveAuditLog error:', error.message);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error('[dataService] saveAuditLog exception:', error);
+      return false;
+    }
   }
 };

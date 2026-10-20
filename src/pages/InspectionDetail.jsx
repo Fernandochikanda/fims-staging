@@ -90,7 +90,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
     if (!allInspections || allInspections.length === 0) return [];
     
     const clientInsps = allInspections.filter(i => 
-      i.location_id === inspection.location_id && 
+      String(i.location_id) === String(inspection.location_id) && 
       i.score_pct !== null
     );
     
@@ -827,7 +827,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
               🔥 Defeitos Recorrentes
             </h3>
             <span style={{ fontSize: 11, color: "#888" }}>
-              {allInspections?.filter(i => i.location_id === inspection.location_id && i.score_pct !== null).length || 0} inspeções analisadas
+              {allInspections?.filter(i => String(i.location_id) === String(inspection.location_id) && i.score_pct !== null).length || 0} inspeções analisadas
             </span>
           </div>
           
@@ -849,7 +849,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
                 ✅ Nenhum defeito recorrente encontrado
               </p>
               <p style={{ fontSize: 12, color: "#9CA3AF", marginTop: 4 }}>
-                {allInspections?.filter(i => i.location_id === inspection.location_id && i.score_pct !== null).length > 1 
+                {allInspections?.filter(i => String(i.location_id) === String(inspection.location_id) && i.score_pct !== null).length > 1 
                   ? "Este cliente não tem problemas críticos recorrentes." 
                   : "É necessário pelo menos 2 inspeções para identificar padrões."}
               </p>

@@ -58,8 +58,8 @@ export default function ReportCenter({ inspections, locations, users }) {
     setProgress(0);
     
     try {
-      const client = locations.find(l => l.id === Number(clientId));
-      let clientInsps = inspections.filter(i => i.location_id === Number(clientId) && i.score_pct !== null);
+      const client = locations.find(l => String(l.id) === String(clientId));
+      let clientInsps = inspections.filter(i => String(i.location_id) === String(clientId) && i.score_pct !== null);
 
       if (reportType === "daily") {
         clientInsps = clientInsps.filter(i => i.date === dailyDate);

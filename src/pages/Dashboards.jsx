@@ -200,10 +200,10 @@ export function CEODashboard({ inspections, locations, auditLogs, currentUser })
   const performers = getTopBottomPerformers(inspections, locations);
   const analytics = getCompanyAnalytics(inspections);
   
-  const slaCompliance = Math.round((locations.filter(l => { const li = submitted.filter(i => i.location_id === l.id); return li.length ? (li.reduce((s,i) => s+i.score_pct, 0) / li.length) >= SLA_TARGET : false; }).length / locations.length) * 100);
+  const slaCompliance = Math.round((locations.filter(l => { const li = submitted.filter(i => String(i.location_id) === String(l.id)); return li.length ? (li.reduce((s,i) => s+i.score_pct, 0) / li.length) >= SLA_TARGET : false; }).length / locations.length) * 100);
   const failedSlaCount = locations.length - Math.round((slaCompliance / 100) * locations.length);
   const estimatedPenaltyRisk = failedSlaCount * 15000;
-  const excellentClients = locations.filter(l => { const li = submitted.filter(i => i.location_id === l.id); return li.length ? (li.reduce((s,i) => s+i.score_pct, 0) / li.length) >= 95 : false; }).length;
+  const excellentClients = locations.filter(l => { const li = submitted.filter(i => String(i.location_id) === String(l.id)); return li.length ? (li.reduce((s,i) => s+i.score_pct, 0) / li.length) >= 95 : false; }).length;
   const inspectorBonusPool = excellentClients * 5000;
 
   const highLevelLogs = auditLogs.filter(l => ["review", "notification", "schedule", "capa_alert"].includes(l.type)).slice(0, 5);
