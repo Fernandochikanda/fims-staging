@@ -11,6 +11,7 @@ import InspectionDetail from "./pages/InspectionDetail";
 import MonthlyReport from "./pages/MonthlyReport";
 import ReportCenter from "./pages/ReportCenter";
 import Alerts from "./pages/Alerts";
+import Defects from "./pages/Defects";
 import Schedule from "./pages/Schedule";
 import LiveMap from "./pages/LiveMap";
 import Team from "./pages/Team";
@@ -751,7 +752,7 @@ function AppContent() {
             />
           ) : page === "dashboard" ? (
             currentUser.role === ROLES.CEO || currentUser.role === ROLES.ADMIN ? 
-              <CEODashboard inspections={inspections} locations={locations} auditLogs={auditLogs} currentUser={currentUser} />
+              <CEODashboard inspections={inspections} locations={locations} auditLogs={auditLogs} currentUser={currentUser} onView={handleViewInspection} />
             : currentUser.role === ROLES.SUPERVISOR ? 
               <SupervisorDashboard inspections={inspections} users={users} currentUser={currentUser} onView={handleViewInspection} />
             : 
@@ -778,6 +779,8 @@ function AppContent() {
             <Messages users={users} currentUser={currentUser} />
           ) : page === "alerts" ? (
             <Alerts inspections={inspections} onView={handleViewInspection} onUpdate={handleUpdateInspection} />
+          ) : page === "defects" ? (
+            <Defects currentUser={currentUser} />
           ) : page === "schedule" ? (
             <div>
               <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end" }}>

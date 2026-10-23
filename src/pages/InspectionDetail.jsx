@@ -1,12 +1,15 @@
 // /src/pages/InspectionDetail.jsx
 import { useState, useEffect } from "react";
 import { jsPDF } from "jspdf";
+import * as XLSX from 'xlsx';
 import logoUrl from '../LOGO.png';
 import { Icon } from "../lib/icons";
 import ScoreRing from "../components/ScoreRing";
 import StatusBadge from "../components/StatusBadge";
 import { photoStore } from "../lib/photoStore";
-import { ROLES } from "../data/constants";
+import { defectService } from "../services/defectService";
+import { useComms } from "../context/CommsContext";
+import { ROLES, SEED_USERS } from "../data/constants";
 import { scoreLabel, getCategoryHealth, generateAISummary } from "../lib/helpers";
 export default function InspectionDetail({ inspection, currentUser, onBack, onUpdate, addAuditLog, allInspections }) {
   const [activeTab, setActiveTab] = useState("resumo");
@@ -17,6 +20,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
   const [qcItem, setQcItem] = useState(null);
   const [qcText, setQcText] = useState("");
   const [loading, setLoading] = useState(true);
+  const { notify } = useComms();
   // Verificar se o usuário pode revisar (ADMIN ou SUPERVISOR)
   const canReview = currentUser && [ROLES.ADMIN, ROLES.SUPERVISOR].includes(currentUser.role);
   // ============================================================
@@ -130,9 +134,34 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
     
     return results.slice(0, 10);
   })();
-  const handleApprove = () => { 
-    onUpdate({ ...inspection, status: "reviewed" }); 
-    addAuditLog(currentUser, "Inspeção Aprovada", "review", `Aprovou a inspeção de ${inspection.location_name}`); 
+  const handleApprove = () => {
+    onUpdate({ ...inspection, status: "reviewed" });
+    addAuditLog(currentUser, "Inspeção Aprovada", "review", `Aprovou a inspeção de ${inspection.location_name}`);
+    // Feature 2: notify admin + supervisor + CEO that the inspection is done (approved)
+    const doneMsg = `\u2705 Inspeção concluída: ${inspection.location_name || "N/A"} (${inspection.date ? new Date(inspection.date).toLocaleDateString("pt-PT") : ""}) está aprovada e pronta para o cliente.`;
+    [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR].forEach(role => {
+      SEED_USERS.filter(u => u.role === role).forEach(u => notify(u.id, doneMsg, "inspections"));
+    });
+    // Feature 3: process defects (items scoring < 3) + emit alert notifications
+    const changes = defectService.processInspection(inspection);
+    changes.newDefects.forEach(d => {
+      const alertMsg = `\u26A0 DEFECTO: "${d.item_label}" em ${d.location_name} scored ${d.score}/5. Corrigir em 48h. Escalado ao CEO.`;
+      [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR].forEach(role => {
+        SEED_USERS.filter(u => u.role === role).forEach(u => notify(u.id, alertMsg, "defects"));
+      });
+    });
+    changes.resolvedDefects.forEach(d => {
+      const resMsg = `\u2705 DEFECTO RESOLVIDO: "${d.item_label}" em ${d.location_name} foi corrigido na inspeção de ${new Date(d.resolved_at).toLocaleDateString("pt-PT")}.`;
+      [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR].forEach(role => {
+        SEED_USERS.filter(u => u.role === role).forEach(u => notify(u.id, resMsg, "defects"));
+      });
+    });
+    changes.recurringDefects.forEach(d => {
+      const recMsg = `DEFECTO RECORRENTE: "${d.item_label}" em ${d.location_name} continua em aberto (${d.recurrence_count}x).`;
+      [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR].forEach(role => {
+        SEED_USERS.filter(u => u.role === role).forEach(u => notify(u.id, recMsg, "defects"));
+      });
+    });
   };
   const handleReject = () => {
     if (!rejectNote.trim()) return alert("Por favor, adicione uma nota de correção geral.");
@@ -151,12 +180,55 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
     setQcItem(null);
   };
   // Funções de exportação (PDF E WORD COM FOTOS)
-  const handleDownloadPDF = async () => {
+  const handleDownloadExcel = () => {
+    try {
+      const secScores = (TEMPLATE_SECTIONS || []).map(s => {
+        const sItems = (inspection.items || []).filter(i => i.section_id === s.id && i.score !== null);
+        const avg = sItems.length ? Math.round((sItems.reduce((sum, i) => sum + Number(i.score), 0) / (sItems.length * 5)) * 100) : null;
+        const health = getCategoryHealth(sItems);
+        return { "Secção": s.name || s.title || "Seção", "Score %": avg !== null ? avg : "N/A", "Risco": health.risk };
+      });
+      const resumo = [
+        { Campo: "Cliente", Valor: inspection.location_name || "N/A" },
+        { Campo: "Data", Valor: inspection.date || "N/A" },
+        { Campo: "Inspetor", Valor: inspection.inspector_name || "N/A" },
+        { Campo: "Score Total", Valor: (inspection.score_pct || 0) + "%" },
+        { Campo: "Tipo", Valor: "Interno" },
+      ];
+      const itens = (inspection.items || []).map(i => {
+        const sec = (inspection.sections || []).find(s => String(s.id) === String(i.section_id));
+        return {
+          "Secção": sec ? (sec.title || sec.name || "") : "",
+          "Item": i.label || i.text || "",
+          "Score": i.score !== null ? i.score : "",
+          "Comentário": i.comment || "",
+          "Comentário QC": i.qc_comment || "",
+        };
+      });
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumo), "Resumo");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(secScores), "Categorias");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itens), "Itens");
+      XLSX.writeFile(wb, "Relatorio-Interno-" + (inspection.location_name || "Inspecao") + ".xlsx");
+    } catch (error) {
+      console.error("Erro ao gerar Excel:", error);
+      alert("Erro ao gerar Excel: " + (error && error.message ? error.message : "tente novamente"));
+    }
+  };
+
+  const handleDownloadPDF = async (reportType = "internal") => {
     try {
       const doc = new jsPDF();
-      const ai = generateAISummary(inspection.items, inspection.location_name);
-      
-      // Buscar a imagem do logo e converter para DataURL
+      const hexRgb = (hex) => {
+        const h = String(hex || "#888").replace('#', '');
+        return [parseInt(h.slice(0, 2), 16) || 136, parseInt(h.slice(2, 4), 16) || 136, parseInt(h.slice(4, 6), 16) || 136];
+      };
+      const isStaffCategory = (section) => {
+        const id = String(section?.id || "");
+        const name = String(section?.name || section?.title || "").toUpperCase();
+        return name.includes("PESSOAL") || name.includes("STAFF") || name.includes("EQUIPA") || id.includes("pessoal") || id.includes("staff");
+      };
+
       let logoDataUrl = null;
       try {
         const response = await fetch(logoUrl);
@@ -166,87 +238,128 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
           reader.onloadend = () => resolve(reader.result);
           reader.readAsDataURL(blob);
         });
-      } catch(e) { console.warn("Erro ao carregar logo:", e); }
+      } catch (e) { console.warn("Erro ao carregar logo:", e); }
 
-      // Header com Logo
-      doc.setFillColor(30, 42, 58); 
+      doc.setFillColor(30, 42, 58);
       doc.rect(0, 0, 210, 30, 'F');
-
-      // Adicionar Logo (se carregado)
       if (logoDataUrl) {
         try {
-          // Fundo branco atrás do logo para destacar
-          doc.setFillColor(255, 255, 255); 
+          doc.setFillColor(255, 255, 255);
           doc.roundedRect(13, 6, 34, 18, 2, 2, 'F');
-          // Inserir a imagem do logo
           doc.addImage(logoDataUrl, 'PNG', 15, 8, 30, 14);
-        } catch(e) { console.warn("Erro ao adicionar logo ao PDF:", e); }
+        } catch (e) { console.warn("Erro ao adicionar logo ao PDF:", e); }
       }
-
-      doc.setTextColor(255, 255, 255); 
-      doc.setFontSize(20); 
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(20);
       doc.setFont("helvetica", "bold");
       doc.text("Relatório de Inspeção", 105, 18, { align: "center" });
-      doc.setFontSize(10); 
+      doc.setFontSize(10);
       doc.setFont("helvetica", "normal");
       doc.text("NEMCHEM - Field Inspection Management System", 105, 25, { align: "center" });
-      // Info Box
-      doc.setFillColor(248, 247, 244); 
+
+      doc.setFillColor(248, 247, 244);
       doc.roundedRect(14, 35, 182, 30, 3, 3, 'F');
-      doc.setTextColor(50, 50, 50); 
+      doc.setTextColor(50, 50, 50);
       doc.setFontSize(10);
+      const typeLabel = reportType === "client" ? "Cliente" : "Interno";
       doc.text(`Cliente: ${inspection.location_name}`, 18, 43);
       doc.text(`Data: ${new Date(inspection.date).toLocaleDateString("pt-PT")}`, 18, 49);
       doc.text(`Inspetor: ${inspection.inspector_name || "N/A"}`, 18, 55);
       doc.text(`Score Total: ${inspection.score_pct || 0}%`, 120, 43);
-      doc.text(`Estado: ${(inspection.status || "N/A").toUpperCase()}`, 120, 49);
+      doc.text(`Tipo: ${typeLabel}`, 120, 49);
       let y = 72;
-      doc.setFontSize(13); 
-      doc.setTextColor(30, 42, 58); 
-      doc.setFont("helvetica", "bold");
-      doc.text("Executive Summary & AI Recommendations", 14, y); 
-      y += 6;
-      doc.setFontSize(10); 
-      doc.setTextColor(80, 80, 80); 
-      doc.setFont("helvetica", "normal");
-      const splitSummary = doc.splitTextToSize(ai.summary || "Resumo disponível após conclusão da inspeção.", 180);
-      doc.text(splitSummary, 14, y); 
-      y += splitSummary.length * 5 + 4;
-      
-      if (ai.recommendations && ai.recommendations.length > 0) {
-        ai.recommendations.forEach(rec => {
+
+      if (sectionScores.length > 0) {
+        if (y > 250) { doc.addPage(); y = 20; }
+        doc.setFontSize(13);
+        doc.setTextColor(30, 42, 58);
+        doc.setFont("helvetica", "bold");
+        doc.text("Category Health Scores", 14, y);
+        y += 7;
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "normal");
+        sectionScores.forEach(s => {
           if (y > 270) { doc.addPage(); y = 20; }
-          const cleanRec = rec.replace(/\*\*/g, '');
-          const splitRec = doc.splitTextToSize(cleanRec, 180);
-          doc.text(splitRec, 14, y); 
-          y += splitRec.length * 5 + 2;
+          const health = s.health || { avg: 0, risk: "N/A", color: "#888" };
+          const pct = s.avg !== null ? s.avg : 0;
+          const valTxt = s.avg !== null ? `${s.avg}% (${health.risk})` : "N/A";
+          const [r, g, b] = hexRgb(health.color);
+          doc.setTextColor(50, 50, 50);
+          doc.text(String(s.name || s.title || "Seção"), 14, y);
+          doc.setTextColor(r, g, b);
+          doc.text(valTxt, 196, y, { align: "right" });
+          y += 3;
+          doc.setFillColor(229, 231, 235);
+          doc.roundedRect(14, y, 182, 5, 1, 1, 'F');
+          doc.setFillColor(r, g, b);
+          doc.roundedRect(14, y, Math.min(pct, 100) / 100 * 182, 5, 1, 1, 'F');
+          y += 9;
         });
+        doc.setTextColor(50, 50, 50);
+        y += 4;
       }
-      y += 6;
+
+      // Defects & Alerts (items scoring < 3 = defects)
+      {
+        const openItems = (inspection.items || []).filter(it => it.score !== null && it.score < 3);
+        const resolvedItems = (inspection.items || []).filter(it => it.score !== null && it.score >= 3)
+          .map(it => ({ it, d: defectService.getResolvedDefectForItem(inspection.location_id, it) }))
+          .filter(({ d }) => d);
+        if (openItems.length > 0 || resolvedItems.length > 0) {
+          if (y > 250) { doc.addPage(); y = 20; }
+          doc.setFontSize(13); doc.setTextColor(163, 45, 45); doc.setFont("helvetica", "bold");
+          doc.text("Defects & Alerts", 14, y); y += 8;
+          doc.setFontSize(10);
+          openItems.forEach(it => {
+            if (y > 270) { doc.addPage(); y = 20; }
+            const d = defectService.getOpenDefectForItem(inspection.location_id, it);
+            doc.setTextColor(163, 45, 45); doc.setFont("helvetica", "bold");
+            const head = doc.splitTextToSize("\u26A0 " + String(it.label || it.text || "Item") + " \u2014 Score " + it.score + "/5", 180);
+            doc.text(head, 14, y); y += head.length * 5;
+            doc.setFont("helvetica", "normal"); doc.setTextColor(80, 80, 80);
+            doc.text("Fix within 48h \u2014 Escalated to CEO", 14, y); y += 5;
+            if (d && d.due_at) { doc.text("Deadline: " + new Date(d.due_at).toLocaleString("pt-PT"), 14, y); y += 5; }
+            if (d && d.recurrence_count > 1) { doc.setTextColor(163, 45, 45); doc.text("Recurring: " + d.recurrence_count + "x", 14, y); y += 5; }
+            y += 3;
+          });
+          resolvedItems.forEach(({ it, d }) => {
+            if (y > 270) { doc.addPage(); y = 20; }
+            doc.setTextColor(15, 110, 86); doc.setFont("helvetica", "bold");
+            const head = doc.splitTextToSize("\u2705 " + String(it.label || it.text || "Item") + " \u2014 RESOLVED", 180);
+            doc.text(head, 14, y); y += head.length * 5;
+            doc.setFont("helvetica", "normal"); doc.setTextColor(80, 80, 80);
+            if (d && d.opened_at) { doc.text("Was a problem since " + new Date(d.opened_at).toLocaleDateString("pt-PT"), 14, y); y += 5; }
+            y += 3;
+          });
+          doc.setTextColor(50, 50, 50);
+          y += 4;
+        }
+      }
+
       // Sections with Items
       for (const section of TEMPLATE_SECTIONS) {
         if (y > 250) { doc.addPage(); y = 20; }
-        doc.setFillColor(30, 42, 58); 
+        doc.setFillColor(30, 42, 58);
         doc.roundedRect(14, y, 182, 7, 2, 2, 'F');
-        doc.setTextColor(255, 255, 255); 
-        doc.setFontSize(11); 
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(11);
         doc.setFont("helvetica", "bold");
-        doc.text(section.name || section.title || "Seção", 18, y + 5); 
+        doc.text(section.name || section.title || "Seção", 18, y + 5);
         y += 10;
         const secData = inspection.sections?.find(s => s.id === section.id);
         if (secData?.observation) {
-          doc.setFontSize(9); 
-          doc.setTextColor(80, 80, 80); 
+          doc.setFontSize(9);
+          doc.setTextColor(80, 80, 80);
           doc.setFont("helvetica", "italic");
           const splitObs = doc.splitTextToSize(`Obs: ${secData.observation}`, 180);
-          doc.text(splitObs, 18, y); 
+          doc.text(splitObs, 18, y);
           y += splitObs.length * 5 + 3;
         }
         const sItems = inspection.items?.filter(i => i.section_id === section.id) || [];
         doc.setFontSize(10);
         for (const item of sItems) {
           if (y > 270) { doc.addPage(); y = 20; }
-          doc.setTextColor(40, 40, 40); 
+          doc.setTextColor(40, 40, 40);
           doc.setFont("helvetica", "normal");
           const itemText = doc.splitTextToSize(item.label || item.text || "Item", 155);
           doc.text(itemText, 18, y);
@@ -254,8 +367,8 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
             const colors = ["230,45,45", "153,60,29", "186,117,23", "59,109,17", "15,110,86"];
             doc.setFillColor(...colors[item.score - 1].split(',').map(Number));
             doc.roundedRect(175, y - 4, 12, 6, 1, 1, 'F');
-            doc.setTextColor(255, 255, 255); 
-            doc.setFontSize(9); 
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(9);
             doc.setFont("helvetica", "bold");
             doc.text(item.score.toString(), 181, y, { align: "center" });
           }
@@ -263,9 +376,10 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
         }
         y += 6;
       }
-      // ANEXO DE FOTOS NO PDF
+
       const allPhotosToPrint = [];
       for (const section of TEMPLATE_SECTIONS) {
+        if (reportType === "client" && isStaffCategory(section)) continue;
         const secPhotos = photosByItem[section.id] || [];
         const sItems = inspection.items?.filter(i => i.section_id === section.id) || [];
         const itemPhotos = sItems.flatMap(i => photosByItem[i.id] || []);
@@ -279,12 +393,10 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
         let py = 20;
         doc.setFontSize(13); doc.setTextColor(30, 42, 58); doc.setFont("helvetica", "bold");
         doc.text("Anexo: Evidências Fotográficas", 14, py); py += 10;
-        
         for (const group of allPhotosToPrint) {
           if (py > 250) { doc.addPage(); py = 20; }
           doc.setFontSize(11); doc.setTextColor(80, 80, 80);
           doc.text(group.sectionName, 14, py); py += 6;
-          
           let imgX = 14;
           for (const photo of group.photos) {
             try {
@@ -295,57 +407,40 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
                 reader.onloadend = () => resolve(reader.result);
                 reader.readAsDataURL(blob);
               });
-              
               if (py > 250) { doc.addPage(); py = 20; }
               doc.addImage(dataUrl, 'JPEG', imgX, py, 40, 30);
               imgX += 44;
-              if (imgX > 170) {
-                imgX = 14;
-                py += 34;
-              }
-            } catch(e) {
-              console.warn("Erro ao adicionar imagem ao PDF:", e);
-            }
+              if (imgX > 170) { imgX = 14; py += 34; }
+            } catch (e) { console.warn("Erro ao adicionar imagem ao PDF:", e); }
           }
           if (imgX > 14) py += 40;
         }
-        // Atualizar a variável Y para a posição logo após a última foto
-        y = py; 
+        y = py;
       }
-      // Signatures (MOVIDO PARA O FINAL - SEMPRE DEPOIS DAS FOTOS)
+
       if (y > 250) { doc.addPage(); y = 20; }
-      
-      // Adicionar uma quebra de linha extra para separar as assinaturas das fotos
       y += 10;
-      
-      if (inspection.inspector_sig) { 
-        try { 
-          doc.addImage(inspection.inspector_sig, 'PNG', 20, y, 40, 15); 
-          doc.text("Inspector", 20, y + 20); 
-        } catch(e) {} 
+      if (inspection.inspector_sig) {
+        try { doc.addImage(inspection.inspector_sig, 'PNG', 20, y, 40, 15); doc.text("Inspector", 20, y + 20); } catch (e) {}
       }
-      if (inspection.client_sig) { 
-        try { 
-          doc.addImage(inspection.client_sig, 'PNG', 120, y, 40, 15); 
-          doc.text("Client", 120, y + 20); 
-        } catch(e) {} 
+      if (inspection.client_sig) {
+        try { doc.addImage(inspection.client_sig, 'PNG', 120, y, 40, 15); doc.text("Client", 120, y + 20); } catch (e) {}
       }
       const pageCount = doc.internal.getNumberOfPages();
-      for (let i = 1; i <= pageCount; i++) { 
-        doc.setPage(i); 
-        doc.setFontSize(8); 
-        doc.setTextColor(150, 150, 150); 
-        doc.text("NEMCHEM © 2024 - Documento gerado pelo FIMS", 105, 290, { align: "center" }); 
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setTextColor(150, 150, 150);
+        doc.text("NEMCHEM © 2024 - Documento gerado pelo FIMS", 105, 290, { align: "center" });
       }
-      doc.save(`Relatorio-${inspection.location_name || "Inspecao"}.pdf`);
+      doc.save(`Relatorio-${typeLabel}-${inspection.location_name || "Inspecao"}.pdf`);
     } catch (error) {
       console.error("Erro ao gerar PDF:", error);
-      alert("Erro ao gerar PDF. Tente novamente.");
+      alert("Erro ao gerar PDF: " + (error && error.message ? error.message : "tente novamente"));
     }
   };
-  const handleDownloadWord = () => {
+  const handleDownloadWord = (reportType = "internal") => {
     try {
-      const ai = generateAISummary(inspection.items, inspection.location_name);
       let html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>Export</title>
       <style>
         body { font-family: Arial, sans-serif; font-size: 11pt; color: #333; }
@@ -358,20 +453,69 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
         .obs { font-style: italic; color: #555; margin-bottom: 10px; background: #f9f9f9; padding: 8px; }
         .cmt { color: #666; font-size: 10pt; margin-left: 15px; }
         .qc { color: #A32D2D; font-size: 10pt; margin-left: 15px; font-weight: bold; }
-        .ai-box { background: #E6F1FB; padding: 10px; margin-bottom: 20px; border-left: 4px solid #378ADD; }
         .photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
         .photo-grid img { width: 100%; height: 150px; object-fit: cover; border: 1px solid #ddd; }
+        .health-scores { margin: 12px 0; }
+        .health-row { margin-bottom: 10px; }
       </style>
       </head><body>`;
-      
-      html += `<h1>Relatório de Inspeção</h1><div class="meta">
+
+      html += `<h1>Relatório de Inspeção${reportType === "client" ? " — Cliente" : " — Interno"}</h1><div class="meta">
         <div><strong>Cliente:</strong> ${inspection.location_name || "N/A"}</div>
         <div><strong>Data:</strong> ${new Date(inspection.date).toLocaleDateString("pt-PT")}</div>
         <div><strong>Inspetor:</strong> ${inspection.inspector_name || "N/A"}</div>
         <div><strong>Score Total:</strong> ${inspection.score_pct || 0}%</div>
       </div>`;
-      
-      html += `<div class="ai-box"><strong>🤖 AI Executive Summary:</strong><br/>${ai.summary || "Resumo disponível após conclusão da inspeção."}<br/><br/><strong>Recommendations:</strong><ul>${(ai.recommendations || []).map(r => `<li>${r.replace(/\*\*/g, '')}</li>`).join('')}</ul></div>`;
+
+      if (sectionScores.length > 0) {
+        html += `<h2>📊 Category Health Scores</h2><div class="health-scores">`;
+        sectionScores.forEach(s => {
+          const health = s.health || { avg: 0, health: 0, risk: "N/A", color: "#888" };
+          const pct = s.avg !== null ? s.avg : 0;
+          const fill = Math.min(pct, 100);
+          const rest = 100 - fill;
+          const label = s.name || s.title || "Seção";
+          const valTxt = s.avg !== null ? `${s.avg}% (${health.risk})` : "N/A";
+          html += `<div class="health-row">` +
+            `<table cellspacing="0" cellpadding="0" style="width:100%; border:none; border-collapse:collapse; margin-bottom:3px;"><tr>` +
+            `<td style="font-size:11pt; color:#444; text-align:left;">${label}</td>` +
+            `<td style="font-size:11pt; font-weight:bold; color:${health.color}; text-align:right;">${valTxt}</td>` +
+            `</tr></table>` +
+            `<table cellspacing="0" cellpadding="0" style="width:100%; height:8px; border-collapse:collapse;"><tr>` +
+            `<td style="width:${fill}%; background:${health.color}; font-size:1px; line-height:8px; height:8px;">&nbsp;</td>` +
+            `<td style="width:${rest}%; background:#E5E7EB; font-size:1px; line-height:8px; height:8px;">&nbsp;</td>` +
+            `</tr></table>` +
+            `</div>`;
+        });
+        html += `</div>`;
+      }
+
+      // Defects & Alerts (items scoring < 3 = defects)
+      {
+        const openItems = (inspection.items || []).filter(it => it.score !== null && it.score < 3);
+        const resolvedItems = (inspection.items || []).filter(it => it.score !== null && it.score >= 3)
+          .map(it => ({ it, d: defectService.getResolvedDefectForItem(inspection.location_id, it) }))
+          .filter(({ d }) => d);
+        if (openItems.length > 0 || resolvedItems.length > 0) {
+          html += `<h2>\u26A0 Defects & Alerts</h2>`;
+          openItems.forEach(it => {
+            const d = defectService.getOpenDefectForItem(inspection.location_id, it);
+            html += `<div style="margin-bottom:12px;padding:10px;border-left:4px solid #A32D2D;background:#FEF2F2;border-radius:4px;">` +
+              `<div style="font-weight:bold;color:#A32D2D;">\u26A0 ${it.label || it.text || "Item"} \u2014 Score ${it.score}/5</div>` +
+              `<div style="color:#666;margin-top:4px;">Fix within 48h \u2014 Escalated to CEO</div>` +
+              (d && d.due_at ? `<div style="color:#666;font-size:10pt;margin-top:2px;">Deadline: ${new Date(d.due_at).toLocaleString("pt-PT")}</div>` : "") +
+              (d && d.recurrence_count > 1 ? `<div style="color:#A32D2D;font-size:10pt;margin-top:2px;">Recurring: ${d.recurrence_count}x</div>` : "") +
+              `</div>`;
+          });
+          resolvedItems.forEach(({ it, d }) => {
+            html += `<div style="margin-bottom:12px;padding:10px;border-left:4px solid #0F6E56;background:#ECFDF5;border-radius:4px;">` +
+              `<div style="font-weight:bold;color:#0F6E56;">\u2705 ${it.label || it.text || "Item"} \u2014 RESOLVED</div>` +
+              (d && d.opened_at ? `<div style="color:#666;margin-top:4px;">Was a problem since ${new Date(d.opened_at).toLocaleDateString("pt-PT")}</div>` : "") +
+              `</div>`;
+          });
+        }
+      }
+
       TEMPLATE_SECTIONS.forEach(section => {
         const secData = inspection.sections?.find(s => s.id === section.id);
         html += `<h2>${section.name || section.title || "Seção"}</h2>`;
@@ -386,39 +530,44 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
           if (item.qc_comment) html += `<div class="qc">⚠ QC: ${item.qc_comment}</div>`;
           html += `</div>`;
         });
-        
-        // Adicionar fotos no Word
-        const secPhotos = photosByItem[section.id] || [];
-        const itemPhotos = sItems.flatMap(i => photosByItem[i.id] || []);
-        const allPhotos = [...secPhotos, ...itemPhotos];
-        
-        if (allPhotos.length > 0) {
-          html += `<div class="photo-grid">`;
-          allPhotos.forEach(photo => {
-            html += `<img src="${photo.url}" alt="Evidência" />`;
-          });
-          html += `</div>`;
+
+        const secIdStr = String(section.id || "");
+        const secNameU = String(section.name || section.title || "").toUpperCase();
+        const isStaffCat = secNameU.includes("PESSOAL") || secNameU.includes("STAFF") || secNameU.includes("EQUIPA") || secIdStr.includes("pessoal") || secIdStr.includes("staff");
+        const includePhotos = reportType === "internal" || !isStaffCat;
+        if (includePhotos) {
+          const secPhotos = photosByItem[section.id] || [];
+          const itemPhotos = sItems.flatMap(i => photosByItem[i.id] || []);
+          const allPhotos = [...secPhotos, ...itemPhotos];
+
+          if (allPhotos.length > 0) {
+            html += `<div class="photo-grid">`;
+            allPhotos.forEach(photo => {
+              html += `<img src="${photo.url}" alt="Evidência" />`;
+            });
+            html += `</div>`;
+          }
         }
       });
-      // Signatures
       html += `<div style="margin-top: 40px; display: flex; justify-content: space-between;">`;
       if (inspection.inspector_sig) html += `<div><img src="${inspection.inspector_sig}" style="width: 150px; height: 50px;" /><br/><strong>Inspector Signature</strong></div>`;
       if (inspection.client_sig) html += `<div><img src="${inspection.client_sig}" style="width: 150px; height: 50px;" /><br/><strong>Client Signature</strong></div>`;
       html += `</div>`;
       html += `</body></html>`;
-      
+
       const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `Relatorio-${inspection.location_name || "Inspecao"}.doc`;
+      const typeLabel = reportType === "client" ? "Cliente" : "Interno";
+      link.download = `Relatorio-${typeLabel}-${inspection.location_name || "Inspecao"}.doc`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Erro ao gerar Word:", error);
-      alert("Erro ao gerar Word. Tente novamente.");
+      alert("Erro ao gerar Word: " + (error && error.message ? error.message : "tente novamente"));
     }
   };
   // Se não houver dados, mostrar loading
@@ -456,21 +605,32 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
           <StatusBadge status={inspection.status} />
         </div>
       </div>
+      {/* Excel (Interno) — supervisor/admin only */}
+      {canReview && (
+        <div className="card" style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 500 }}>📊 Exportar Excel (Interno)</div>
+          <button className="btn btn-success btn-sm" onClick={handleDownloadExcel}>
+            <Icon name="download" size={13} /> Excel (.xlsx)
+          </button>
+        </div>
+      )}
+
       {/* Export Buttons */}
       <div className="card" style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div style={{ fontSize: 14, fontWeight: 500 }}>📄 Exportar Relatório Oficial</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="btn btn-danger btn-sm" onClick={handleDownloadPDF}>
-            <Icon name="download" size={13} /> PDF
+          <button className="btn btn-danger btn-sm" onClick={() => handleDownloadPDF("client")} title="Relatório PDF para o Cliente (omite fotos de pessoal/staff)">
+            <Icon name="download" size={13} /> PDF (Cliente)
           </button>
-          <button className="btn btn-primary btn-sm" onClick={handleDownloadWord}>
-            <Icon name="file" size={13} /> Word
+          <button className="btn btn-danger btn-sm" onClick={() => handleDownloadPDF("internal")} title="Relatório PDF Interno (completo)">
+            <Icon name="download" size={13} /> PDF (Interno)
           </button>
-          {inspection.status === "reviewed" && (
-            <button className="btn btn-secondary btn-sm" onClick={() => onUpdate({ ...inspection, status: "sent_to_client" })}>
-              <Icon name="send" size={13} /> Enviar ao Cliente
-            </button>
-          )}
+          <button className="btn btn-primary btn-sm" onClick={() => handleDownloadWord("client")} title="Relatório Word para o Cliente (omite fotos de pessoal/staff)">
+            <Icon name="file" size={13} /> Word (Cliente)
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => handleDownloadWord("internal")} title="Relatório Word Interno (completo)">
+            <Icon name="file" size={13} /> Word (Interno)
+          </button>
         </div>
       </div>
       {/* QC Actions */}

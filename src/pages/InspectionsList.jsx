@@ -135,7 +135,6 @@ export default function InspectionsList({
             <option value="submitted">Submetida</option>
             <option value="reviewed">Aprovada</option>
             <option value="needs_corrections">Correção Necessária</option>
-            <option value="sent_to_client">Enviada ao Cliente</option>
             <option value="closed">Fechada</option>
           </select>
           <button className="btn btn-primary btn-sm" onClick={onCreate}>
