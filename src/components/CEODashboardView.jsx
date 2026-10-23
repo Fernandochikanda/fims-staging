@@ -388,7 +388,7 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
           <div style={{ fontSize: 18, fontWeight: 700 }}>FIMS – Relatório de Inspeções</div>
           <div style={{ fontSize: 12, opacity: 0.85 }}>Visão Geral e Desempenho dos Clientes</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 10, opacity: 0.85 }}>Período de Inspeção</div>
             <select value={period} onChange={e => setPeriod(e.target.value)} style={{ marginTop: 2, padding: "4px 8px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)", background: "rgba(255,255,255,0.12)", color: "white", fontWeight: 600 }}>
@@ -407,7 +407,7 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 16 }}>
+      <div className="metric-grid">
         {kpiCards.map((k, i) => (
           <div key={i} className="card" style={{ padding: 14, borderLeft: "4px solid " + k.color, display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, color: k.color }}>
@@ -423,7 +423,7 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+      <div className="two-col" style={{ marginBottom: 16 }}>
         <div className="card" style={{ padding: 16, display: "flex", alignItems: "center", gap: 16 }}>
           <ScoreRing pct={slaCompliance} size={72} />
           <div>
@@ -440,7 +440,7 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+      <div className="two-col" style={{ marginBottom: 16 }}>
         <div className="card" style={{ padding: 16 }}>
           <h3 style={{ fontSize: 14, marginBottom: 8, color: "#1E2A3A" }}>Classificação das Inspeções</h3>
           {donutData.length > 0 ? (
@@ -520,7 +520,7 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 16 }}>
+      <div className="three-col" style={{ marginBottom: 16 }}>
         <div className="card" style={{ padding: 14 }}>
           <h3 style={{ fontSize: 13, marginBottom: 8, color: "#0F6E56" }}>Top 3 Clientes</h3>
           {top3.length === 0 && <div style={{ fontSize: 12, color: "#888" }}>Sem dados.</div>}
@@ -553,7 +553,7 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+      <div className="two-col" style={{ marginBottom: 16 }}>
         <div className="card" style={{ padding: 14 }}>
           <h3 style={{ fontSize: 13, marginBottom: 8, color: "#A32D2D" }}>Risco de Churn</h3>
           {churnRisk.length === 0 && <div style={{ fontSize: 12, color: "#888" }}>Nenhum cliente em risco.</div>}
@@ -579,7 +579,7 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
+      <div className="ceo-split">
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ padding: 12, borderBottom: "1px solid #eee", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <h3 style={{ fontSize: 14, margin: 0, color: "#1E2A3A", flex: 1 }}>Registro de Inspeções</h3>

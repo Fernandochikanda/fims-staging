@@ -160,6 +160,7 @@ tr:hover td { background: #FAFAF8; }
 /* ===== GRIDS ===== */
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .three-col { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.ceo-split { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
 
 /* ===== PAGE HEADER ===== */
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; gap: 12px; flex-wrap: wrap; }
@@ -210,7 +211,7 @@ tr:hover td { background: #FAFAF8; }
 /* ===== RESPONSIVE — TABLET ===== */
 @media (max-width: 1024px) {
   .page { padding: 16px; }
-  .two-col, .three-col { grid-template-columns: 1fr; }
+  .two-col, .three-col, .ceo-split { grid-template-columns: 1fr; }
 }
 
 /* ===== RESPONSIVE — MOBILE ===== */
