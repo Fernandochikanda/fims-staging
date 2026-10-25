@@ -1,5 +1,5 @@
 // /src/App.jsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Icon } from "./lib/icons";
 import Sidebar from "./components/Sidebar";
 import Topbar from "./components/Topbar";
@@ -29,6 +29,8 @@ import { CommsProvider, useComms } from "./context/CommsContext";
 import { getClientTemplate } from "./utils/excelTemplateImporter";
 import { authService } from "./services/authService";
 import { dataStore } from "./lib/dataStore";
+import { defectService } from "./services/defectService";
+import settingsService, { NOTIF_EVENTS } from "./services/settingsService";
 
 // Chaves para localStorage
 const STORAGE_KEYS = {
@@ -84,6 +86,8 @@ function NewInspectionModal({ locations, users, currentUser, onClose, onCreate }
     if (!loc) return;
     
     const inspector = users.find(u => String(u.id) === String(inspectorId)) || null;
+    // Supervisor real: primeiro supervisor ativo da equipa (nada de hardcoded)
+    const supervisor = users.find(u => u.role === ROLES.SUPERVISOR && u.active !== false) || null;
     const template = getClientTemplate(loc.name);
     const templateSections = template.sections || [];
     
@@ -110,8 +114,8 @@ function NewInspectionModal({ locations, users, currentUser, onClose, onCreate }
       location_name: loc.name,
       inspector_id: inspector ? inspector.id : null, 
       inspector_name: inspector ? inspector.name : null,
-      supervisor_id: 3, 
-      supervisor_name: "Ana Sitoe",
+      supervisor_id: supervisor ? supervisor.id : null, 
+      supervisor_name: supervisor ? supervisor.name : null,
       status: inspector ? "pending_acceptance" : "unassigned", 
       accepted: null, 
       score_pct: null, 
@@ -183,7 +187,7 @@ function NewInspectionModal({ locations, users, currentUser, onClose, onCreate }
 }
 
 function AppContent() {
-  const { notify, notifications } = useComms();
+  const { notify, notifyEvent, notifications } = useComms();
   
   // --- ESTADO ---
   const [currentUser, setCurrentUser] = useState(null);
@@ -369,6 +373,47 @@ function AppContent() {
     else localStorage.removeItem(STORAGE_KEYS.VIEWING_INSPECTION);
   }, [viewingInspection]);
 
+  // ============================================
+  // ESCALONAMENTO AUTOMÁTICO DE DEFEITOS (GLOBAL)
+  // Corre em background a cada 5 min, mesmo sem abrir a página "Defeitos":
+  //  - defeitos com SLA 48h excedido → escalados ao CEO/admin/supervisores
+  //  - re-escalados a cada 24h enquanto continuarem abertos
+  // ============================================
+  const usersRef = useRef(users);
+  usersRef.current = users;
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
+  const notifyEventRef = useRef(notifyEvent);
+  notifyEventRef.current = notifyEvent;
+
+  useEffect(() => {
+    if (!isInitialized || !currentUser) return;
+    let alive = true;
+
+    const runEscalation = async () => {
+      const list = usersRef.current;
+      if (!list || list.length === 0) return;
+      try {
+        const escalated = await defectService.autoEscalate();
+        if (!alive || !escalated.length) return;
+        for (const d of escalated) {
+          const isRe = (d.escalation_count || 0) > 1;
+          const msg = (isRe ? '🚨 RE-ESCALAÇÃO (' + d.escalation_count + 'ª vez): ' : '🚨 ESCALONAMENTO (48h): ') +
+            '"' + d.item_label + '" em ' + d.location_name + ' continua em aberto após o prazo. Escalado ao CEO.';
+          await notifyEventRef.current(NOTIF_EVENTS.DEFECT_ESCALATED, list, msg, 'defects', {
+            excludeId: currentUserRef.current?.id, sender: null,
+          });
+        }
+      } catch (e) {
+        console.warn('[App] Auto-escalação falhou:', e);
+      }
+    };
+
+    runEscalation(); // corre logo no arranque/login
+    const iv = setInterval(runEscalation, 5 * 60 * 1000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [isInitialized, currentUser?.id]);
+
   // --- FUNÇÕES ---
   const alertCount = inspections.filter(i => i.alert_level === "critical" && i.score_pct !== null && !i.resolved).length;
   const notifCount = notifications.filter(n => currentUser && String(n.userId) === String(currentUser.id) && !n.read).length;
@@ -492,16 +537,23 @@ function AppContent() {
       const { dataService } = await import('./services/dataService');
       await dataService.saveInspection(updated);
     } catch (error) { console.error("Erro ao submeter no Supabase:", error); }
-    addAuditLog(currentUser, "Notificação Enviada", "notification", `Email e WhatsApp enviados para o Supervisor (${updated.supervisor_name}) sobre a inspeção em ${updated.location_name}`);
-    notify(3, `Nova inspeção submetida por ${currentUser.name} para ${updated.location_name}.`, "inspections");
+    addAuditLog(currentUser, "Inspeção Submetida", "notification", `Supervisor(es) notificado(s) sobre a inspeção em ${updated.location_name}`);
+    // ============================================================
+    // FIM DE INSPEÇÃO (submissão) → supervisores recebem NOTIFICAÇÃO
+    // + MENSAGEM no chat, conforme Configurações → Notificações
+    // ============================================================
+    await notifyEvent(NOTIF_EVENTS.INSPECTION_SUBMITTED, users,
+      `📋 Nova inspeção submetida por ${currentUser.name} para ${updated.location_name} — aguarda revisão.`,
+      "inspections", { excludeId: currentUser.id, sender: currentUser });
     
     const lowScoreItems = (updated.items || []).filter(i => i.score !== null && i.score <= 2);
     if (lowScoreItems.length > 0) {
       const capaDeadline = new Date();
       capaDeadline.setHours(capaDeadline.getHours() + 48);
       addAuditLog(currentUser, "CAPA Alert Triggered", "capa_alert", `${lowScoreItems.length} item(s) scored 1-2 at ${updated.location_name}. Corrective action required by ${capaDeadline.toLocaleString("pt-PT")}.`);
-      notify(3, `⚠️ CAPA ALERT: ${updated.location_name} has ${lowScoreItems.length} critical defect(s). Fix within 48 hours.`, "inspections");
-      notify(2, `⚠️ CAPA ALERT: ${updated.location_name} has ${lowScoreItems.length} critical defect(s). Supervisor has been notified.`, "inspections");
+      const capaMsg = `⚠️ CAPA ALERT: ${updated.location_name} tem ${lowScoreItems.length} defeito(s) crítico(s) (score 1-2). Correção obrigatória em 48h.`;
+      await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, capaMsg, "inspections", {
+        excludeId: currentUser.id, sender: currentUser });
     }
   };
   
@@ -511,7 +563,9 @@ function AppContent() {
     
     setInspections(prev => prev.map(i => i.id === insp.id ? merged : i));
     addAuditLog(currentUser, "Tarefa Aceite", "schedule", `Aceitou a tarefa para ${insp.location_name}`);
-    notify(3, `${currentUser.name} aceitou a tarefa para ${insp.location_name}.`, "schedule");
+    await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
+      `${currentUser.name} aceitou a tarefa para ${insp.location_name}.`, "schedule",
+      { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser });
     try {
       const { dataService } = await import('./services/dataService');
       await dataService.saveInspection(merged);
@@ -527,7 +581,9 @@ function AppContent() {
     
     setInspections(prev => prev.map(i => i.id === insp.id ? merged : i));
     addAuditLog(currentUser, "Tarefa Recusada", "schedule", `Recusou a tarefa para ${insp.location_name}. Motivo: ${reason}`);
-    notify(3, `⚠️ ${currentUser.name} RECUSOU a tarefa para ${insp.location_name}. Motivo: ${reason}`, "schedule");
+    await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
+      `⚠️ ${currentUser.name} RECUSOU a tarefa para ${insp.location_name}. Motivo: ${reason}`, "schedule",
+      { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser });
     try {
       const { dataService } = await import('./services/dataService');
       await dataService.saveInspection(merged);
@@ -540,7 +596,9 @@ function AppContent() {
     const leaveTask = { id: genId(), inspector_id: user.id, inspector_name: user.name, date, type: "leave", status: "leave" };
     setInspections(prev => [leaveTask, ...prev]);
     addAuditLog(user, "Folga Pedida", "schedule", `Pediu folga para ${date}`);
-    notify(3, `${user.name} pediu folga para ${date}.`, "schedule");
+    await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
+      `${user.name} pediu folga para ${date}.`, "schedule",
+      { excludeId: user.id, rolesOverride: ["supervisor", "admin"], sender: currentUser });
     try {
       const { dataService } = await import('./services/dataService');
       await dataService.saveInspection(leaveTask);
@@ -585,8 +643,16 @@ function AppContent() {
     setInspections(prev => prev.map(i => i.id === merged.id ? merged : i));
     if (viewingInspection) setViewingInspection(merged);
     
-    if (merged.status === "needs_corrections") notify(merged.inspector_id, `A inspeção de ${merged.location_name} foi rejeitada. Veja as correções necessárias.`, "inspections");
-    if (merged.status === "reviewed") notify(2, `Uma inspeção foi aprovada por ${currentUser.name}. Pronta para envio ao cliente.`, "inspections");
+    if (merged.status === "needs_corrections") {
+      await notifyEvent(NOTIF_EVENTS.INSPECTION_REJECTED, users,
+        `A inspeção de ${merged.location_name} foi devolvida por ${currentUser.name}. Veja as correções necessárias.`,
+        "inspections", { excludeId: currentUser.id, sender: currentUser });
+    }
+    if (merged.status === "reviewed") {
+      await notifyEvent(NOTIF_EVENTS.INSPECTION_COMPLETED, users,
+        `Uma inspeção (${merged.location_name}) foi aprovada por ${currentUser.name}. Pronta para envio ao cliente.`,
+        "inspections", { excludeId: currentUser.id, sender: currentUser });
+    }
     try {
       const { dataService } = await import('./services/dataService');
       await dataService.saveInspection(merged);
@@ -626,7 +692,12 @@ function AppContent() {
       const { dataService } = await import('./services/dataService');
       for (const task of tasksWithTemplates) {
         await dataService.saveInspection(task);
-        if(task.inspector_id) notify(task.inspector_id, `Nova tarefa agendada para ${task.date} no local ${task.location_name}.`, "schedule");
+        if (task.inspector_id) {
+          await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
+            `Nova tarefa agendada para ${task.date} no local ${task.location_name}.`, "schedule",
+            { rolesOverride: ["inspector"], excludeId: currentUser.id, sender: currentUser,
+              singleUser: String(task.inspector_id) });
+        }
       }
     } catch (error) { console.error("Erro ao salvar despacho no Supabase:", error); }
   };
@@ -653,7 +724,12 @@ function AppContent() {
       const { dataService } = await import('./services/dataService');
       for (const task of tasksWithTemplates) {
         await dataService.saveInspection(task);
-        if(task.inspector_id) notify(task.inspector_id, `Nova tarefa agendada para ${task.date} no local ${task.location_name}.`, "schedule");
+        if (task.inspector_id) {
+          await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
+            `Nova tarefa agendada para ${task.date} no local ${task.location_name}.`, "schedule",
+            { rolesOverride: ["inspector"], excludeId: currentUser.id, sender: currentUser,
+              singleUser: String(task.inspector_id) });
+        }
       }
     } catch (error) { console.error("Erro ao salvar despacho múltiplo no Supabase:", error); }
   };
@@ -664,7 +740,10 @@ function AppContent() {
     
     setInspections(prev => prev.map(i => i.id === merged.id ? merged : i));
     if (notifyInspector && merged.inspector_id) {
-      notify(merged.inspector_id, `Tarefa atualizada: ${merged.location_name} movida para ${merged.date}.`, "schedule");
+      await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
+        `Tarefa atualizada: ${merged.location_name} movida para ${merged.date}.`, "schedule",
+        { rolesOverride: ["inspector"], excludeId: currentUser.id, sender: currentUser,
+          singleUser: String(merged.inspector_id) });
     }
     addAuditLog(currentUser, "Tarefa Movida (Drag/Drop)", "schedule", `Moveu ${merged.location_name} para ${merged.date} (${merged.inspector_name || "Unassigned"})`);
     try {
@@ -679,7 +758,12 @@ function AppContent() {
     
     setInspections(prev => prev.map(i => i.id === merged.id ? merged : i));
     addAuditLog(currentUser, "Inspeção Reagendada", "schedule", `Reagendou ${merged.location_name} para ${merged.date}. Motivo: ${merged.reschedule_reason}`);
-    if (notifyInspector && merged.inspector_id) notify(merged.inspector_id, `Inspeção reagendada para ${merged.date} às ${merged.start_time}.`, "schedule");
+    if (notifyInspector && merged.inspector_id) {
+      await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
+        `Inspeção reagendada para ${merged.date} às ${merged.start_time}.`, "schedule",
+        { rolesOverride: ["inspector"], excludeId: currentUser.id, sender: currentUser,
+          singleUser: String(merged.inspector_id) });
+    }
     if (notifyClient) alert("Client notified (Simulated).");
     setReschedulingTask(null);
     try {
@@ -749,6 +833,7 @@ function AppContent() {
               onUpdate={handleUpdateInspection} 
               addAuditLog={addAuditLog} 
               allInspections={inspections} 
+              users={users}
             />
           ) : page === "dashboard" ? (
             currentUser.role === ROLES.CEO || currentUser.role === ROLES.ADMIN ? 
@@ -780,7 +865,7 @@ function AppContent() {
           ) : page === "alerts" ? (
             <Alerts inspections={inspections} onView={handleViewInspection} onUpdate={handleUpdateInspection} />
           ) : page === "defects" ? (
-            <Defects currentUser={currentUser} />
+            <Defects currentUser={currentUser} users={users} />
           ) : page === "schedule" ? (
             <div>
               <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end" }}>

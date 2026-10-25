@@ -10,6 +10,157 @@ import { scoreLabel } from "../lib/helpers";
 import { TemplateImporter } from "./Management/TemplateImporter";
 import { loadTemplatesFromStorage, getTemplateByClientName } from "../utils/excelTemplateImporter";
 import { SupabaseSync } from "./Management/SupabaseSync";
+import settingsService, { NOTIF_EVENTS, EVENT_LABELS } from "../services/settingsService";
+
+// ============================================================
+// CONFIGURAÇÃO DE NOTIFICAÇÕES
+// Quem recebe o quê, por evento, e por que canal (notificação / mensagem).
+// ============================================================
+const ROLE_LABELS = {
+  supervisor: "Supervisores",
+  admin: "Administradores",
+  ceo: "CEO",
+  inspector: "Inspetores",
+};
+
+export function NotificationSettingsCard() {
+  const [settings, setSettings] = useState(() => settingsService.get());
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+
+  const showFeedback = (ok, msg) => {
+    setFeedback({ ok, msg });
+    setTimeout(() => setFeedback(null), 4000);
+  };
+
+  const toggleEvent = (ev) => {
+    setSettings(prev => ({
+      ...prev,
+      events: { ...prev.events, [ev]: { ...prev.events[ev], enabled: !prev.events[ev].enabled } },
+    }));
+  };
+
+  const toggleRole = (ev, role) => {
+    setSettings(prev => {
+      const cur = prev.events[ev].roles || [];
+      const next = cur.includes(role) ? cur.filter(r => r !== role) : [...cur, role];
+      return { ...prev, events: { ...prev.events, [ev]: { ...prev.events[ev], roles: next } } };
+    });
+  };
+
+  const toggleChannel = (ev, ch) => {
+    setSettings(prev => ({
+      ...prev,
+      events: {
+        ...prev.events,
+        [ev]: { ...prev.events[ev], channels: { ...prev.events[ev].channels, [ch]: !prev.events[ev].channels[ch] } },
+      },
+    }));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    const res = await settingsService.save(settings);
+    setSaving(false);
+    if (res.ok) showFeedback(true, "Configuração guardada e partilhada com todos os dispositivos.");
+    else showFeedback(false, "Guardada localmente, mas não foi possível sincronizar com o Supabase: " + res.error);
+  };
+
+  const handleReset = async () => {
+    if (!window.confirm("Restaurar a configuração padrão de notificações?")) return;
+    const { settings: def } = await settingsService.reset();
+    setSettings(def);
+    showFeedback(true, "Configuração padrão restaurada.");
+  };
+
+  const handleTest = async () => {
+    const res = await settingsService.testConnection();
+    if (res.ok) showFeedback(true, "Ligação ao Supabase OK — as notificações/mensagens serão distribuídas.");
+    else showFeedback(false, "PROBLEMA DETETADO: " + res.error + " — execute o script supabase_fix.sql no SQL Editor do Supabase.");
+  };
+
+  const eventOrder = Object.values(NOTIF_EVENTS);
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <h3 style={{ fontSize: 15, marginBottom: 6, color: "#1E2A3A", display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span>🔔 Configuração de Notificações</span>
+      </h3>
+      <p style={{ fontSize: 13, color: "#666", marginBottom: 14 }}>
+        Define quem recebe cada alerta e por que canal (campainha 🔔 e/ou mensagem no chat 💬).
+        Ex.: assim que uma inspeção termina, os supervisores recebem a notificação e a mensagem.
+      </p>
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
+          <thead>
+            <tr style={{ borderBottom: "2px solid #E5E7EB", textAlign: "left" }}>
+              <th style={{ padding: "8px 6px" }}>Evento</th>
+              <th style={{ padding: "8px 6px", width: 90, textAlign: "center" }}>Ativo</th>
+              <th style={{ padding: "8px 6px" }}>Destinatários</th>
+              <th style={{ padding: "8px 6px", width: 150, textAlign: "center" }}>Canais</th>
+            </tr>
+          </thead>
+          <tbody>
+            {eventOrder.map(ev => {
+              const cfg = settings.events[ev] || { enabled: false, roles: [], channels: {} };
+              return (
+                <tr key={ev} style={{ borderBottom: "1px solid #F3F4F6" }}>
+                  <td style={{ padding: "8px 6px", fontWeight: 500 }}>{EVENT_LABELS[ev] || ev}</td>
+                  <td style={{ padding: "8px 6px", textAlign: "center" }}>
+                    <input type="checkbox" checked={cfg.enabled} onChange={() => toggleEvent(ev)} style={{ width: 16, height: 16, cursor: "pointer" }} />
+                  </td>
+                  <td style={{ padding: "8px 6px" }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {Object.keys(ROLE_LABELS).map(role => (
+                        <button
+                          key={role}
+                          className={"btn btn-sm " + (cfg.roles?.includes(role) ? "btn-primary" : "btn-secondary")}
+                          style={{ padding: "3px 10px", fontSize: 11 }}
+                          onClick={() => toggleRole(ev, role)}
+                        >
+                          {ROLE_LABELS[role]}
+                        </button>
+                      ))}
+                    </div>
+                  </td>
+                  <td style={{ padding: "8px 6px", textAlign: "center" }}>
+                    <label style={{ marginRight: 12, cursor: "pointer", whiteSpace: "nowrap" }}>
+                      <input type="checkbox" checked={cfg.channels?.notification !== false} onChange={() => toggleChannel(ev, "notification")} style={{ marginRight: 4, cursor: "pointer" }} />
+                      🔔 Notificação
+                    </label>
+                    <label style={{ cursor: "pointer", whiteSpace: "nowrap" }}>
+                      <input type="checkbox" checked={cfg.channels?.message === true} onChange={() => toggleChannel(ev, "message")} style={{ marginRight: 4, cursor: "pointer" }} />
+                      💬 Mensagem
+                    </label>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {feedback && (
+        <div style={{
+          marginTop: 12, padding: 10, borderRadius: 6, fontSize: 13,
+          background: feedback.ok ? "#ECFDF5" : "#FEF2F2",
+          color: feedback.ok ? "#065F46" : "#991B1B",
+        }}>
+          {feedback.ok ? "✅ " : "❌ "}{feedback.msg}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+        <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+          {saving ? "⏳ A guardar…" : "💾 Guardar Configuração"}
+        </button>
+        <button className="btn btn-secondary" onClick={handleTest}>🔌 Testar Ligação</button>
+        <button className="btn btn-secondary" onClick={handleReset}>↩️ Restaurar Padrão</button>
+      </div>
+    </div>
+  );
+}
 
 // ============================================================
 // USERS PAGE
@@ -951,6 +1102,11 @@ export function SettingsPage({ inspections, setInspections }) {
           <div className="page-sub">Gestão de dados, sincronização e backup</div>
         </div>
       </div>
+
+      {/* ============================================================ */}
+      {/* CONFIGURAÇÃO DE NOTIFICAÇÕES */}
+      {/* ============================================================ */}
+      <NotificationSettingsCard />
 
       {/* ============================================================ */}
       {/* GESTÃO DE INSPEÇÕES COM SUPABASE */}

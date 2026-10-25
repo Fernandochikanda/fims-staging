@@ -3,7 +3,7 @@
 // Add-ons: SLA gauge, defect-resolution gauge, Top/Bottom 3 clients, inspector
 // leaderboard, churn-risk flags, recent-activity feed, compare-to-last-year toggle,
 // clickable client rows (onView).
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { jsPDF } from "jspdf";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ComposedChart, Line, Legend } from "recharts";
 import { Icon } from "../lib/icons";
@@ -80,6 +80,26 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
   const [filterStatus, setFilterStatus] = useState("all");
   const [compareMode, setCompareMode] = useState(false);
 
+  // Defeitos agora vêm do Supabase (async) — carregados em estado + refrescados periodicamente
+  const [openDefects, setOpenDefects] = useState([]);
+  const [resolvedDefects, setResolvedDefects] = useState([]);
+  const [allDefects, setAllDefects] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const all = await defectService.getAll();
+        if (!alive) return;
+        setAllDefects(all);
+        setOpenDefects(all.filter(d => d.status === "open"));
+        setResolvedDefects(all.filter(d => d.status === "resolved"));
+      } catch (e) {}
+    };
+    load();
+    const iv = setInterval(load, 60000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+
   const periodDays = (PERIODS.find(x => x.id === period) || PERIODS[0]).days;
   const cutoff = useMemo(() => Date.now() - periodDays * 86400000, [periodDays]);
   const prevCutoff = useMemo(() => Date.now() - 2 * periodDays * 86400000, [periodDays]);
@@ -101,12 +121,6 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
   const clientsTrend = pct(clientsInspected, prevClients);
   const avgTrend = prevScored.length ? (avgScore - prevAvg) : null;
 
-  let openDefects = [];
-  try { openDefects = defectService.getOpen(); } catch (e) {}
-  let resolvedDefects = [];
-  try { resolvedDefects = defectService.getResolved(); } catch (e) {}
-  let allDefects = [];
-  try { allDefects = defectService.getAll(); } catch (e) {}
   const problemsOpen = openDefects.length;
   const problemsOverdue = openDefects.filter(d => { try { return defectService.slaRemaining(d) < 0; } catch (e) { return false; } }).length;
   const problemsResolved = resolvedDefects.length;
@@ -182,11 +196,10 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
       const last = li.slice().sort((a, b) => new Date(b.date) - new Date(a.date))[0];
       const li2 = li.filter(i => i.score_pct !== null);
       const avg = li2.length ? Math.round(li2.reduce((s, i) => s + i.score_pct, 0) / li2.length) : null;
-      let open = 0;
-      try { open = defectService.getDefectsForLocation(loc.id).filter(d => d.status === "open").length; } catch (e) {}
+      const open = allDefects.filter(d => String(d.location_id) === String(loc.id) && d.status === "open").length;
       return { id: loc.id, name: loc.name, insps: li.length, last: last && last.date, avg, open };
     }).filter(Boolean).sort((a, b) => b.insps - a.insps).slice(0, 6);
-  }, [filtered, locations]);
+  }, [filtered, locations, allDefects]);
 
   const bestClient = clientSummary.slice().sort((a, b) => (b.avg || 0) - (a.avg || 0))[0];
   const mostProblems = clientSummary.slice().sort((a, b) => b.open - a.open)[0];

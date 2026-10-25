@@ -1,57 +1,104 @@
 // src/services/notificationService.js
+// ============================================================================
+// Notificações FIMS — persistidas no Supabase (tabela fims_notifications) com:
+//  - IDs determinísticos (gerados no cliente) → sem duplicados ao fundir.
+//  - OUTBOX local: se o Supabase falhar (RLS/offline), a notificação fica em
+//    fila e é reenviada automaticamente — nada se perde silenciosamente.
+//  - Realtime por utilizador + polling de segurança feito no CommsContext.
+// ============================================================================
+
 import { supabase, TABLES } from '../lib/supabase';
 import { genId } from '../lib/helpers';
 
+const OUTBOX_KEY = 'fims_notif_outbox';
+const SEEN_KEY = 'fims_notif_seen';
+
+function readOutbox() {
+  try { return JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]'); } catch { return []; }
+}
+function writeOutbox(list) {
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(list.slice(0, 200))); } catch (e) {}
+}
+export function readSeen() {
+  try { return JSON.parse(localStorage.getItem(SEEN_KEY) || '[]'); } catch { return []; }
+}
+export function markSeen(ids) {
+  try {
+    const seen = new Set(readSeen());
+    ids.forEach(id => seen.add(String(id)));
+    const arr = [...seen].slice(-500);
+    localStorage.setItem(SEEN_KEY, JSON.stringify(arr));
+    return arr;
+  } catch (e) { return []; }
+}
+
 export const notificationService = {
   _channel: null,
+  _channelUserId: null,
   _callbacks: [],
 
   /**
-   * Enviar notificação (versão simplificada sem from_user_id)
+   * Enviar notificação. `id` opcional (determinístico evita duplicados).
+   * Devolve { ok, notif, error }. Em caso de falha guarda no outbox.
    */
-  async send(userId, text, link = null) {
+  async send(userId, text, link = null, id = null, ts = null) {
+    const notif = {
+      id: id || genId(),
+      user_id: String(userId),
+      text,
+      link,
+      read: false,
+      created_at: ts || new Date().toISOString(),
+    };
     try {
-      const notif = {
-        id: genId(),
-        user_id: String(userId),
-        text,
-        link,
-        read: false,
-        created_at: new Date().toISOString()
-      };
-
       const { data, error } = await supabase
         .from(TABLES.NOTIFICATIONS)
         .insert([notif])
         .select()
         .single();
-
       if (error) {
-        console.warn('[notificationService] Fallback para localStorage:', error.message);
-        this.saveLocal(notif);
-        return notif;
+        this.enqueue(notif);
+        return { ok: false, notif, error: error.message };
       }
-
-      return data;
-    } catch (error) {
-      console.warn('[notificationService] Exception:', error.message);
-      const notif = {
-        id: genId(),
-        userId: String(userId),
-        text,
-        link,
-        read: false,
-        timestamp: new Date().toISOString()
-      };
-      this.saveLocal(notif);
-      return notif;
+      return { ok: true, notif: this.formatFromDb(data), error: null };
+    } catch (e) {
+      this.enqueue(notif);
+      return { ok: false, notif, error: e.message };
     }
   },
 
-  /**
-   * Buscar notificações de um utilizador
-   */
-  async fetchForUser(userId, limit = 50) {
+  /** Fila de reenvio (outbox) */
+  enqueue(notif) {
+    const list = readOutbox();
+    if (!list.some(n => n.id === notif.id)) {
+      list.push(notif);
+      writeOutbox(list);
+    }
+  },
+
+  /** Tenta reenviar tudo o que estiver na fila. Devolve nº de enviados. */
+  async flushOutbox() {
+    const list = readOutbox();
+    if (!list.length) return 0;
+    const remaining = [];
+    let sent = 0;
+    for (const n of list) {
+      try {
+        const { error } = await supabase.from(TABLES.NOTIFICATIONS).upsert([n]);
+        if (error) remaining.push(n);
+        else sent++;
+      } catch (e) {
+        remaining.push(n);
+      }
+    }
+    writeOutbox(remaining);
+    return sent;
+  },
+
+  outboxCount() { return readOutbox().length; },
+
+  /** Buscar notificações de um utilizador (Supabase; se falhar, cache local) */
+  async fetchForUser(userId, limit = 100) {
     try {
       const { data, error } = await supabase
         .from(TABLES.NOTIFICATIONS)
@@ -59,44 +106,49 @@ export const notificationService = {
         .eq('user_id', String(userId))
         .order('created_at', { ascending: false })
         .limit(limit);
-
       if (error) throw error;
-
-      return (data || []).map(this.formatFromDb);
-    } catch (error) {
+      return (data || []).map(r => this.formatFromDb(r));
+    } catch (e) {
       return this.getLocalForUser(userId);
     }
   },
 
   /**
-   * Subscrever para notificações em tempo real
+   * Subscrever INSERTs em tempo real para um utilizador.
+   * `onNewNotification(notif)` é chamado por cada evento.
    */
   subscribe(userId, onNewNotification) {
+    // substitui canal anterior
     if (this._channel) {
-      this.unsubscribe();
+      try { supabase.removeChannel(this._channel); } catch (e) {}
+      this._channel = null;
     }
-
+    this._callbacks = [];
     this._callbacks.push(onNewNotification);
+    this._channelUserId = String(userId);
 
     this._channel = supabase
-      .channel('fims-notifications-realtime')
+      .channel('fims-notifications-' + String(userId))
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: TABLES.NOTIFICATIONS,
-          filter: `user_id=eq.${userId}`
+          filter: 'user_id=eq.' + String(userId),
         },
         (payload) => {
+          if (!payload.new) return;
           const notif = this.formatFromDb(payload.new);
-          this._callbacks.forEach(cb => {
-            try { cb(notif); } catch (e) {}
-          });
+          this._callbacks.forEach(cb => { try { cb(notif); } catch (e) {} });
         }
       )
       .subscribe((status) => {
-        console.log('[notificationService] Realtime:', status);
+        if (status === 'SUBSCRIBED') {
+          // console.log('[notificationService] Realtime ativo para', userId);
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          // o CommsContext faz polling como rede de segurança
+        }
       });
 
     return () => this.unsubscribe();
@@ -104,23 +156,25 @@ export const notificationService = {
 
   unsubscribe() {
     if (this._channel) {
-      supabase.removeChannel(this._channel);
+      try { supabase.removeChannel(this._channel); } catch (e) {}
       this._channel = null;
+      this._channelUserId = null;
       this._callbacks = [];
     }
   },
 
   formatFromDb(row) {
     return {
-      id: row.id,
-      userId: row.user_id,
+      id: String(row.id),
+      userId: String(row.user_id),
       text: row.text,
       link: row.link,
-      read: row.read,
-      timestamp: row.created_at
+      read: row.read === true,
+      timestamp: row.created_at,
     };
   },
 
+  /** Cache local de emergência (offline) */
   saveLocal(notif) {
     try {
       const notifs = JSON.parse(localStorage.getItem('fims_notifs') || '[]');
@@ -132,10 +186,16 @@ export const notificationService = {
   getLocalForUser(userId) {
     try {
       const notifs = JSON.parse(localStorage.getItem('fims_notifs') || '[]');
-      return notifs.filter(n => n.user_id === String(userId) || n.userId === String(userId));
-    } catch (e) {
-      return [];
-    }
+      return notifs.filter(n => (n.user_id === String(userId) || n.userId === String(userId)))
+        .map(n => ({
+          id: String(n.id),
+          userId: String(n.user_id || n.userId),
+          text: n.text,
+          link: n.link || null,
+          read: n.read === true,
+          timestamp: n.created_at || n.timestamp,
+        }));
+    } catch (e) { return []; }
   },
 
   async markAsRead(notifId, userId) {
@@ -143,7 +203,7 @@ export const notificationService = {
       await supabase
         .from(TABLES.NOTIFICATIONS)
         .update({ read: true })
-        .eq('id', notifId)
+        .eq('id', String(notifId))
         .eq('user_id', String(userId));
     } catch (e) {}
   },
@@ -156,5 +216,7 @@ export const notificationService = {
         .eq('user_id', String(userId))
         .eq('read', false);
     } catch (e) {}
-  }
+  },
 };
+
+export default notificationService;

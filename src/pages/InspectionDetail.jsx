@@ -9,9 +9,10 @@ import StatusBadge from "../components/StatusBadge";
 import { photoStore } from "../lib/photoStore";
 import { defectService } from "../services/defectService";
 import { useComms } from "../context/CommsContext";
-import { ROLES, SEED_USERS } from "../data/constants";
+import { ROLES } from "../data/constants";
+import { NOTIF_EVENTS } from "../services/settingsService";
 import { scoreLabel, getCategoryHealth, generateAISummary } from "../lib/helpers";
-export default function InspectionDetail({ inspection, currentUser, onBack, onUpdate, addAuditLog, allInspections }) {
+export default function InspectionDetail({ inspection, currentUser, onBack, onUpdate, addAuditLog, allInspections, users = [] }) {
   const [activeTab, setActiveTab] = useState("resumo");
   const [photosByItem, setPhotosByItem] = useState({});
   const [lightboxUrl, setLightboxUrl] = useState(null);
@@ -20,7 +21,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
   const [qcItem, setQcItem] = useState(null);
   const [qcText, setQcText] = useState("");
   const [loading, setLoading] = useState(true);
-  const { notify } = useComms();
+  const { notify, notifyEvent } = useComms();
   // Verificar se o usuário pode revisar (ADMIN ou SUPERVISOR)
   const canReview = currentUser && [ROLES.ADMIN, ROLES.SUPERVISOR].includes(currentUser.role);
   // ============================================================
@@ -134,47 +135,58 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
     
     return results.slice(0, 10);
   })();
-  const handleApprove = () => {
+  const handleApprove = async () => {
     onUpdate({ ...inspection, status: "reviewed" });
     addAuditLog(currentUser, "Inspeção Aprovada", "review", `Aprovou a inspeção de ${inspection.location_name}`);
-    // Feature 2: notify admin + supervisor + CEO that the inspection is done (approved)
-    const doneMsg = `\u2705 Inspeção concluída: ${inspection.location_name || "N/A"} (${inspection.date ? new Date(inspection.date).toLocaleDateString("pt-PT") : ""}) está aprovada e pronta para o cliente.`;
-    [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR].forEach(role => {
-      SEED_USERS.filter(u => u.role === role).forEach(u => notify(u.id, doneMsg, "inspections"));
+    // ============================================================
+    // FIM DE INSPEÇÃO → supervisores + admin + CEO recebem
+    // NOTIFICAÇÃO e MENSAGEM (conforme Configurações → Notificações)
+    // ============================================================
+    const doneMsg = `✅ Inspeção concluída: ${inspection.location_name || "N/A"} (${inspection.date ? new Date(inspection.date).toLocaleDateString("pt-PT") : ""}) foi aprovada por ${currentUser.name} e está pronta para o cliente.`;
+    await notifyEvent(NOTIF_EVENTS.INSPECTION_COMPLETED, users, doneMsg, "inspections", {
+      excludeId: currentUser.id,
+      sender: currentUser,
     });
-    // Feature 3: process defects (items scoring < 3) + emit alert notifications
-    const changes = defectService.processInspection(inspection);
-    changes.newDefects.forEach(d => {
-      const alertMsg = `\u26A0 DEFECTO: "${d.item_label}" em ${d.location_name} scored ${d.score}/5. Corrigir em 48h. Escalado ao CEO.`;
-      [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR].forEach(role => {
-        SEED_USERS.filter(u => u.role === role).forEach(u => notify(u.id, alertMsg, "defects"));
+    // ============================================================
+    // DEFEITOS (score < 3) → processar + alertar responsáveis
+    // ============================================================
+    const changes = await defectService.processInspection(inspection);
+    for (const d of changes.newDefects) {
+      const alertMsg = `⚠️ NOVO DEFEITO: "${d.item_label}" em ${d.location_name} — score ${d.score}/5. Prazo de correção: 48h. Escalado ao CEO.`;
+      await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, alertMsg, "defects", {
+        excludeId: currentUser.id, sender: currentUser,
       });
-    });
-    changes.resolvedDefects.forEach(d => {
-      const resMsg = `\u2705 DEFECTO RESOLVIDO: "${d.item_label}" em ${d.location_name} foi corrigido na inspeção de ${new Date(d.resolved_at).toLocaleDateString("pt-PT")}.`;
-      [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR].forEach(role => {
-        SEED_USERS.filter(u => u.role === role).forEach(u => notify(u.id, resMsg, "defects"));
+    }
+    for (const d of changes.resolvedDefects) {
+      const resMsg = `✅ DEFEITO RESOLVIDO: "${d.item_label}" em ${d.location_name} foi corrigido na inspeção de ${new Date(d.resolved_at).toLocaleDateString("pt-PT")}.`;
+      await notifyEvent(NOTIF_EVENTS.DEFECT_RESOLVED, users, resMsg, "defects", {
+        excludeId: currentUser.id, sender: currentUser,
       });
-    });
-    changes.recurringDefects.forEach(d => {
-      const recMsg = `DEFECTO RECORRENTE: "${d.item_label}" em ${d.location_name} continua em aberto (${d.recurrence_count}x).`;
-      [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR].forEach(role => {
-        SEED_USERS.filter(u => u.role === role).forEach(u => notify(u.id, recMsg, "defects"));
+    }
+    for (const d of changes.recurringDefects) {
+      const recMsg = `🔁 DEFEITO RECORRENTE: "${d.item_label}" em ${d.location_name} continua em aberto (${d.recurrence_count}ª ocorrência).`;
+      await notifyEvent(NOTIF_EVENTS.DEFECT_RECURRING, users, recMsg, "defects", {
+        excludeId: currentUser.id, sender: currentUser,
       });
-    });
+    }
   };
-  const handleReject = () => {
+  const handleReject = async () => {
     if (!rejectNote.trim()) return alert("Por favor, adicione uma nota de correção geral.");
     const updatedItems = inspection.items.map(i => 
       i.id === qcItem ? { ...i, qc_comment: qcText } : i
     );
-    onUpdate({ 
+    const updated = { 
       ...inspection, 
       status: "needs_corrections", 
       notes: inspection.notes + `\n\n[NECESSITA CORREÇÃO]: ${rejectNote}`, 
       items: updatedItems 
-    });
+    };
+    onUpdate(updated);
     addAuditLog(currentUser, "Inspeção Rejeitada", "review", `Rejeitou a inspeção de ${inspection.location_name}. Motivo: ${rejectNote}`);
+    // Avisar o inspetor (notificação conforme configurações)
+    await notifyEvent(NOTIF_EVENTS.INSPECTION_REJECTED, users,
+      `A inspeção de ${inspection.location_name} foi devolvida por ${currentUser.name}. Veja as correções necessárias: ${rejectNote}`,
+      "inspections", { excludeId: currentUser.id, sender: currentUser });
     setShowRejectBox(false); 
     setRejectNote(""); 
     setQcItem(null);

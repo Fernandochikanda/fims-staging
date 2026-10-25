@@ -133,7 +133,7 @@ export default function Messages({ users, currentUser }) {
   const handleSend = () => {
     if (!text.trim() || !activeChat) return;
     
-    sendMessage(currentUser.id, activeChat.id, text.trim());
+    sendMessage(currentUser.id, activeChat.id, text.trim(), { fromUser: currentUser });
     setText("");
     clearDraft();
     markAllAsRead(activeChat.id);
@@ -144,7 +144,7 @@ export default function Messages({ users, currentUser }) {
     if (!broadcastText.trim()) return;
     
     const targetRole = broadcastTarget === "all" ? null : broadcastTarget;
-    sendBroadcast(currentUser.id, broadcastText.trim(), targetRole);
+    sendBroadcast(currentUser.id, broadcastText.trim(), targetRole, { fromUser: currentUser, users });
     setBroadcastText("");
     setShowBroadcast(false);
   };
@@ -154,7 +154,7 @@ export default function Messages({ users, currentUser }) {
     if (!announcementTitle.trim() || !announcementText.trim()) return;
     
     const targetRole = announcementTarget === "all" ? null : announcementTarget;
-    createAnnouncement(currentUser.id, announcementTitle.trim(), announcementText.trim(), targetRole);
+    createAnnouncement(currentUser.id, announcementTitle.trim(), announcementText.trim(), targetRole, { fromUser: currentUser, users });
     setAnnouncementTitle("");
     setAnnouncementText("");
     setShowAnnouncements(false);
@@ -162,7 +162,7 @@ export default function Messages({ users, currentUser }) {
 
   // Confirmar anúncio (OK Recebido) - CORRIGIDO
   const handleConfirmAnnouncement = (announcementId) => {
-    confirmAnnouncement(announcementId, currentUser.id);
+    confirmAnnouncement(announcementId, currentUser.id, { fromUser: currentUser });
     // Forçar atualização imediata
     setRefreshKey(prev => prev + 1);
   };
@@ -171,7 +171,7 @@ export default function Messages({ users, currentUser }) {
   const handleReplyAnnouncement = (announcementId) => {
     const reply = prompt("Responder ao anúncio:", "");
     if (reply !== null && reply.trim()) {
-      replyToAnnouncement(announcementId, currentUser.id, reply.trim());
+      replyToAnnouncement(announcementId, currentUser.id, reply.trim(), { fromUser: currentUser });
       // Marcar como visualizado após responder
       dismissAnnouncement(announcementId, currentUser.id);
       setRefreshKey(prev => prev + 1);
