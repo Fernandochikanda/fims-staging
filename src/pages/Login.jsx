@@ -1,6 +1,5 @@
 // /src/pages/Login.jsx
 import { useState } from "react";
-import { SEED_USERS } from "../data/constants";
 import { Icon } from "../lib/icons";
 import { authService } from "../services/authService";
 import logoUrl from "../LOGO.png"; // Importação do seu logótipo
@@ -10,29 +9,12 @@ export default function Login({ onLogin }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [useSeed, setUseSeed] = useState(false);
 
   const handleLogin = async () => {
     setError("");
     setLoading(true);
 
     try {
-      // Modo Seed (offline)
-      if (useSeed) {
-        const user = SEED_USERS.find(u => u.email === email);
-        if (user && password === "fims2025") {
-          localStorage.setItem("fims_current_user", JSON.stringify(user));
-          setLoading(false);
-          onLogin(user);
-          return;
-        } else {
-          setError("Email ou senha incorretos. Tente: admin@fims.co.mz / fims2025");
-          setLoading(false);
-          return;
-        }
-      }
-
-      // Modo Supabase
       const result = await authService.login(email, password);
       
       if (result.success) {
@@ -116,33 +98,10 @@ export default function Login({ onLogin }) {
           )}
         </button>
 
-        <div style={{ marginTop: 12 }}>
-          <label style={{ fontSize: 12, color: '#888', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input 
-              type="checkbox" 
-              checked={useSeed} 
-              onChange={(e) => setUseSeed(e.target.checked)} 
-            />
-            Usar modo offline (seed)
-          </label>
-        </div>
-
         <div style={{ marginTop: 20, padding: "12px", background: "#F8F7F4", borderRadius: 8, fontSize: 11, color: "#888" }}>
           <strong>Credenciais</strong><br />
-          {useSeed ? (
-            <>
-              admin@fims.co.mz → Admin<br />
-              ceo@fims.co.mz → CEO<br />
-              supervisor@fims.co.mz → Supervisor<br />
-              inspector1@fims.co.mz → Inspetor<br />
-              <em>Senha: fims2025</em>
-            </>
-          ) : (
-            <>
-              <span style={{ color: '#10B981' }}>✅ Conectado ao Supabase</span><br />
-              Use as credenciais cadastradas no sistema
-            </>
-          )}
+          <span style={{ color: '#10B981' }}>✅ Autenticação segura via Supabase</span><br />
+          Use as credenciais cadastradas no sistema
         </div>
 
         <style>{`
