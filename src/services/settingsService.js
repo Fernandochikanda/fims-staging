@@ -8,7 +8,7 @@
 //  - Fallback total para localStorage se o Supabase estiver indisponível.
 // ============================================================================
 
-import { supabase } from '../lib/supabase';
+import { supabase, rpcWithFallback } from '../lib/supabase';
 
 const SETTINGS_ID = 'notification_settings';
 const LS_KEY = 'fims_notification_settings';
@@ -147,14 +147,22 @@ export const settingsService = {
     return normalize(readLocal());
   },
 
-  /** Guarda no Supabase + cache local. */
+  /** Guarda no Supabase via RPC (fallback: upsert direto pré-migração) + cache local. */
   async save(settings) {
     const norm = normalize({ ...settings, updatedAt: new Date().toISOString(), version: 2 });
     cacheLocal(norm);
     try {
-      const { error } = await supabase
-        .from('fims_settings')
-        .upsert({ id: SETTINGS_ID, value: norm, updated_at: new Date().toISOString() });
+      const { error } = await rpcWithFallback(
+        'fims_save_settings',
+        { p_value: norm },
+        async () => {
+          const { error: e } = await supabase
+            .from('fims_settings')
+            .upsert({ id: SETTINGS_ID, value: norm, updated_at: new Date().toISOString() });
+          if (e) throw e;
+          return null;
+        }
+      );
       if (error) return { ok: false, error: error.message };
       return { ok: true };
     } catch (e) {
@@ -186,12 +194,17 @@ export const settingsService = {
     const enabled = cfg ? cfg.enabled !== false : true;
     if (!enabled && !opts.rolesOverride) return [];
     const excludeId = opts.excludeId != null ? String(opts.excludeId) : null;
-    // singleUser: restringe a um utilizador específico (ex.: o inspetor da tarefa)
+    // singleUser: restringe a um utilizador específico (ex.: o inspetor da tarefa).
+    // Compatibilidade: tarefas antigas guardam inspector_id numérico (dbId).
     if (opts.singleUser != null) {
       const uid = String(opts.singleUser);
       if (excludeId && uid === excludeId) return [];
-      const u = (users || []).find(x => String(x.id) === uid);
-      return (u && u.active !== false) ? [uid] : [];
+      const u = (users || []).find(x =>
+        String(x.id) === uid || (x.dbId != null && String(x.dbId) === uid));
+      if (u && u.active !== false) {
+        return [String(u.id)]; // devolve SEMPRE o id canónico
+      }
+      return [];
     }
     const list = (users || []).filter(u => {
       if (u.active === false) return false;

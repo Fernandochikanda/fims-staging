@@ -146,6 +146,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
     await notifyEvent(NOTIF_EVENTS.INSPECTION_COMPLETED, users, doneMsg, "inspections", {
       excludeId: currentUser.id,
       sender: currentUser,
+      dedupeKey: "inspdone:" + inspection.id,
     });
     // ============================================================
     // DEFEITOS (score < 3) → processar + alertar responsáveis
@@ -154,19 +155,19 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
     for (const d of changes.newDefects) {
       const alertMsg = `⚠️ NOVO DEFEITO: "${d.item_label}" em ${d.location_name} — score ${d.score}/5. Prazo de correção: 48h. Escalado ao CEO.`;
       await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, alertMsg, "defects", {
-        excludeId: currentUser.id, sender: currentUser,
+        excludeId: currentUser.id, sender: currentUser, dedupeKey: "defnew:" + inspection.id + ":" + d.id,
       });
     }
     for (const d of changes.resolvedDefects) {
       const resMsg = `✅ DEFEITO RESOLVIDO: "${d.item_label}" em ${d.location_name} foi corrigido na inspeção de ${new Date(d.resolved_at).toLocaleDateString("pt-PT")}.`;
       await notifyEvent(NOTIF_EVENTS.DEFECT_RESOLVED, users, resMsg, "defects", {
-        excludeId: currentUser.id, sender: currentUser,
+        excludeId: currentUser.id, sender: currentUser, dedupeKey: "defres:" + inspection.id + ":" + d.id,
       });
     }
     for (const d of changes.recurringDefects) {
       const recMsg = `🔁 DEFEITO RECORRENTE: "${d.item_label}" em ${d.location_name} continua em aberto (${d.recurrence_count}ª ocorrência).`;
       await notifyEvent(NOTIF_EVENTS.DEFECT_RECURRING, users, recMsg, "defects", {
-        excludeId: currentUser.id, sender: currentUser,
+        excludeId: currentUser.id, sender: currentUser, dedupeKey: "defrec:" + inspection.id + ":" + d.id,
       });
     }
   };
@@ -186,7 +187,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
     // Avisar o inspetor (notificação conforme configurações)
     await notifyEvent(NOTIF_EVENTS.INSPECTION_REJECTED, users,
       `A inspeção de ${inspection.location_name} foi devolvida por ${currentUser.name}. Veja as correções necessárias: ${rejectNote}`,
-      "inspections", { excludeId: currentUser.id, sender: currentUser });
+      "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "insprej:" + inspection.id });
     setShowRejectBox(false); 
     setRejectNote(""); 
     setQcItem(null);

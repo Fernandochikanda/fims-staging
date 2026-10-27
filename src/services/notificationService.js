@@ -1,13 +1,18 @@
 // src/services/notificationService.js
 // ============================================================================
-// Notificações FIMS — persistidas no Supabase (tabela fims_notifications) com:
-//  - IDs determinísticos (gerados no cliente) → sem duplicados ao fundir.
-//  - OUTBOX local: se o Supabase falhar (RLS/offline), a notificação fica em
-//    fila e é reenviada automaticamente — nada se perde silenciosamente.
-//  - Realtime por utilizador + polling de segurança feito no CommsContext.
+// Notificações FIMS — persistidas no Supabase (fims_notifications).
+//
+// REMEDIAÇÃO (audit NOTIF-001/NOTIF-002/SEC-001):
+//  • Criação via RPC fims_notify com dedupe_key determinística → cada evento
+//    de negócio gera a notificação UMA vez (retries/duplo-clique não duplicam).
+//  • Escritas já não vão direto à tabela (INSERT revogado após a migração);
+//    o outbox local reenvia pelo MESMO RPC — sem perder nada se offline.
+//  • Read-state via RPC fims_notification_read (user_id sempre do destinatário).
+//  • Fallback: enquanto a migração não for aplicada, mantém o insert direto
+//    (comportamento anterior) — zero downtime.
 // ============================================================================
 
-import { supabase, TABLES } from '../lib/supabase';
+import { supabase, TABLES, rpcWithFallback } from '../lib/supabase';
 import { genId } from '../lib/helpers';
 
 const OUTBOX_KEY = 'fims_notif_outbox';
@@ -38,10 +43,15 @@ export const notificationService = {
   _callbacks: [],
 
   /**
-   * Enviar notificação. `id` opcional (determinístico evita duplicados).
+   * Enviar notificação.
+   * `dedupeKey` (recomendado): chave determinística do evento de negócio —
+   * ex.: 'esc:def_123:1', 'inspdone:insp_42'. Retries tornam-se no-ops.
    * Devolve { ok, notif, error }. Em caso de falha guarda no outbox.
    */
-  async send(userId, text, link = null, id = null, ts = null) {
+  async send(userId, text, link = null, id = null, ts = null, dedupeKey = null) {
+    if (userId === undefined || userId === null || userId === '') {
+      return { ok: false, notif: null, error: 'userId em falta' };
+    }
     const notif = {
       id: id || genId(),
       user_id: String(userId),
@@ -49,25 +59,33 @@ export const notificationService = {
       link,
       read: false,
       created_at: ts || new Date().toISOString(),
+      dedupe_key: dedupeKey || null,
     };
-    try {
-      const { data, error } = await supabase
-        .from(TABLES.NOTIFICATIONS)
-        .insert([notif])
-        .select()
-        .single();
-      if (error) {
-        this.enqueue(notif);
-        return { ok: false, notif, error: error.message };
+
+    const { data, error, usedRpc } = await rpcWithFallback(
+      'fims_notify',
+      { p_user_id: notif.user_id, p_text: text, p_link: link, p_dedupe_key: dedupeKey },
+      async () => {
+        const { data: d, error: e } = await supabase
+          .from(TABLES.NOTIFICATIONS)
+          .insert([notif])
+          .select()
+          .single();
+        if (e) throw e;
+        return d;
       }
-      return { ok: true, notif: this.formatFromDb(data), error: null };
-    } catch (e) {
+    );
+
+    if (error) {
       this.enqueue(notif);
-      return { ok: false, notif, error: e.message };
+      return { ok: false, notif, error: error.message };
     }
+    if (data) return { ok: true, notif: this.formatFromDb(data), error: null };
+    // Sem dados (fallback sem retorno): assume enviado a partir do objeto local
+    return { ok: true, notif: this.formatFromDb(notif), error: null };
   },
 
-  /** Fila de reenvio (outbox) */
+  /** Fila de reenvio (outbox) — pelo mesmo RPC, com a mesma dedupe_key */
   enqueue(notif) {
     const list = readOutbox();
     if (!list.some(n => n.id === notif.id)) {
@@ -83,13 +101,9 @@ export const notificationService = {
     const remaining = [];
     let sent = 0;
     for (const n of list) {
-      try {
-        const { error } = await supabase.from(TABLES.NOTIFICATIONS).upsert([n]);
-        if (error) remaining.push(n);
-        else sent++;
-      } catch (e) {
-        remaining.push(n);
-      }
+      const res = await this.send(n.user_id, n.text, n.link || null, n.id, n.created_at, n.dedupe_key || null);
+      if (res.ok) sent++;
+      else remaining.push(n);
     }
     writeOutbox(remaining);
     return sent;
@@ -97,7 +111,10 @@ export const notificationService = {
 
   outboxCount() { return readOutbox().length; },
 
-  /** Buscar notificações de um utilizador (Supabase; se falhar, cache local) */
+  /**
+   * Buscar notificações de um utilizador (Supabase; se falhar, cache local).
+   * `stale: true` sinaliza que veio da cache por erro de rede/BD (NOTIF-002).
+   */
   async fetchForUser(userId, limit = 100) {
     try {
       const { data, error } = await supabase
@@ -109,16 +126,14 @@ export const notificationService = {
       if (error) throw error;
       return (data || []).map(r => this.formatFromDb(r));
     } catch (e) {
-      return this.getLocalForUser(userId);
+      return this.getLocalForUser(userId).map(n => ({ ...n, stale: true }));
     }
   },
 
   /**
    * Subscrever INSERTs em tempo real para um utilizador.
-   * `onNewNotification(notif)` é chamado por cada evento.
    */
   subscribe(userId, onNewNotification) {
-    // substitui canal anterior
     if (this._channel) {
       try { supabase.removeChannel(this._channel); } catch (e) {}
       this._channel = null;
@@ -144,9 +159,7 @@ export const notificationService = {
         }
       )
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          // console.log('[notificationService] Realtime ativo para', userId);
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           // o CommsContext faz polling como rede de segurança
         }
       });
@@ -171,6 +184,7 @@ export const notificationService = {
       link: row.link,
       read: row.read === true,
       timestamp: row.created_at,
+      dedupeKey: row.dedupe_key || null,
     };
   },
 
@@ -199,23 +213,37 @@ export const notificationService = {
   },
 
   async markAsRead(notifId, userId) {
-    try {
-      await supabase
-        .from(TABLES.NOTIFICATIONS)
-        .update({ read: true })
-        .eq('id', String(notifId))
-        .eq('user_id', String(userId));
-    } catch (e) {}
+    const { error } = await rpcWithFallback(
+      'fims_notification_read',
+      { p_user_id: String(userId), p_notification_id: String(notifId) },
+      async () => {
+        const { error: e } = await supabase
+          .from(TABLES.NOTIFICATIONS)
+          .update({ read: true })
+          .eq('id', String(notifId))
+          .eq('user_id', String(userId));
+        if (e) throw e;
+        return null;
+      }
+    );
+    return !error;
   },
 
   async markAllAsRead(userId) {
-    try {
-      await supabase
-        .from(TABLES.NOTIFICATIONS)
-        .update({ read: true })
-        .eq('user_id', String(userId))
-        .eq('read', false);
-    } catch (e) {}
+    const { error } = await rpcWithFallback(
+      'fims_notification_read',
+      { p_user_id: String(userId), p_notification_id: null },
+      async () => {
+        const { error: e } = await supabase
+          .from(TABLES.NOTIFICATIONS)
+          .update({ read: true })
+          .eq('user_id', String(userId))
+          .eq('read', false);
+        if (e) throw e;
+        return null;
+      }
+    );
+    return !error;
   },
 };
 

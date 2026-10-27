@@ -1,5 +1,5 @@
 // /src/App.jsx
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Icon } from "./lib/icons";
 import Sidebar from "./components/Sidebar";
 import Topbar from "./components/Topbar";
@@ -220,20 +220,19 @@ function AppContent() {
         setInspections(savedInspections || genSeedInspections());
         setLocations(savedLocations || SEED_LOCATIONS);
         
+        let loadedUsers = savedUsers || SEED_USERS;
         try {
           const { dataService } = await import('./services/dataService');
           const result = await dataService.fetchUsers();
           if (result.success && result.users.length > 0) {
-            setUsers(result.users);
+            loadedUsers = result.users;
             dataStore.set(STORAGE_KEYS.USERS, result.users);
             console.log("[App] Usuários carregados do Supabase:", result.users.length);
-          } else {
-            setUsers(savedUsers || SEED_USERS);
           }
         } catch (e) {
           console.error("Erro ao buscar usuários:", e);
-          setUsers(savedUsers || SEED_USERS);
         }
+        setUsers(loadedUsers);
         setAuditLogs(savedLogs || []);
         
         const savedUser = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
@@ -244,7 +243,18 @@ function AppContent() {
         if (savedUser) {
           try {
             const user = JSON.parse(savedUser);
-            setCurrentUser(user);
+            // MIGRAÇÃO DE SESSÕES ANTIGAS (IDN-001): se o id da sessão for um id
+            // numérico legado, remapeia para o id canónico (user_id 'usr_*').
+            const s = String(user.id);
+            const match = (loadedUsers || []).find(u =>
+              String(u.id) === s || (u.dbId != null && String(u.dbId) === s));
+            if (match && String(match.id) !== s) {
+              const updated = { ...user, id: match.id, name: match.name || user.name, role: match.role || user.role };
+              localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(updated));
+              setCurrentUser(updated);
+            } else {
+              setCurrentUser(user);
+            }
             if (savedPage && savedPage !== "login") setPage(savedPage);
           } catch (e) { localStorage.removeItem(STORAGE_KEYS.CURRENT_USER); }
         }
@@ -374,44 +384,24 @@ function AppContent() {
   }, [viewingInspection]);
 
   // ============================================
-  // ESCALONAMENTO AUTOMÁTICO DE DEFEITOS (GLOBAL)
-  // Corre em background a cada 5 min, mesmo sem abrir a página "Defeitos":
-  //  - defeitos com SLA 48h excedido → escalados ao CEO/admin/supervisores
-  //  - re-escalados a cada 24h enquanto continuarem abertos
+  // ESCALONAMENTO DE DEFEITOS — AGORA 100% SERVER-SIDE
+  // (pg_cron chama fims_escalate_overdue_defects a cada 15 min; o servidor
+  // cria as notificações/mensagens com dedupe — CEO incluído sempre).
+  // Aqui: apenas REFRESH de UI (leitura) para mostrar escalonamentos recentes.
+  // Corrige ESC-001/ESC-002/ESC-003 — o cliente já não decide nem notifica.
   // ============================================
-  const usersRef = useRef(users);
-  usersRef.current = users;
-  const currentUserRef = useRef(currentUser);
-  currentUserRef.current = currentUser;
-  const notifyEventRef = useRef(notifyEvent);
-  notifyEventRef.current = notifyEvent;
-
   useEffect(() => {
     if (!isInitialized || !currentUser) return;
-    let alive = true;
 
-    const runEscalation = async () => {
-      const list = usersRef.current;
-      if (!list || list.length === 0) return;
-      try {
-        const escalated = await defectService.autoEscalate();
-        if (!alive || !escalated.length) return;
-        for (const d of escalated) {
-          const isRe = (d.escalation_count || 0) > 1;
-          const msg = (isRe ? '🚨 RE-ESCALAÇÃO (' + d.escalation_count + 'ª vez): ' : '🚨 ESCALONAMENTO (48h): ') +
-            '"' + d.item_label + '" em ' + d.location_name + ' continua em aberto após o prazo. Escalado ao CEO.';
-          await notifyEventRef.current(NOTIF_EVENTS.DEFECT_ESCALATED, list, msg, 'defects', {
-            excludeId: currentUserRef.current?.id, sender: null,
-          });
-        }
-      } catch (e) {
-        console.warn('[App] Auto-escalação falhou:', e);
+    const refreshDefects = async () => {
+      try { await defectService.refresh(); } catch (e) {
+        console.warn('[App] Refresh de defeitos falhou:', e);
       }
     };
 
-    runEscalation(); // corre logo no arranque/login
-    const iv = setInterval(runEscalation, 5 * 60 * 1000);
-    return () => { alive = false; clearInterval(iv); };
+    refreshDefects();
+    const iv = setInterval(refreshDefects, 5 * 60 * 1000);
+    return () => clearInterval(iv);
   }, [isInitialized, currentUser?.id]);
 
   // --- FUNÇÕES ---
@@ -544,7 +534,7 @@ function AppContent() {
     // ============================================================
     await notifyEvent(NOTIF_EVENTS.INSPECTION_SUBMITTED, users,
       `📋 Nova inspeção submetida por ${currentUser.name} para ${updated.location_name} — aguarda revisão.`,
-      "inspections", { excludeId: currentUser.id, sender: currentUser });
+      "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "inspsub:" + updated.id });
     
     const lowScoreItems = (updated.items || []).filter(i => i.score !== null && i.score <= 2);
     if (lowScoreItems.length > 0) {
@@ -553,7 +543,7 @@ function AppContent() {
       addAuditLog(currentUser, "CAPA Alert Triggered", "capa_alert", `${lowScoreItems.length} item(s) scored 1-2 at ${updated.location_name}. Corrective action required by ${capaDeadline.toLocaleString("pt-PT")}.`);
       const capaMsg = `⚠️ CAPA ALERT: ${updated.location_name} tem ${lowScoreItems.length} defeito(s) crítico(s) (score 1-2). Correção obrigatória em 48h.`;
       await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, capaMsg, "inspections", {
-        excludeId: currentUser.id, sender: currentUser });
+        excludeId: currentUser.id, sender: currentUser, dedupeKey: "capa:" + updated.id });
     }
   };
   
@@ -565,7 +555,7 @@ function AppContent() {
     addAuditLog(currentUser, "Tarefa Aceite", "schedule", `Aceitou a tarefa para ${insp.location_name}`);
     await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
       `${currentUser.name} aceitou a tarefa para ${insp.location_name}.`, "schedule",
-      { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser });
+      { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "taskacc:" + insp.id });
     try {
       const { dataService } = await import('./services/dataService');
       await dataService.saveInspection(merged);
@@ -583,7 +573,7 @@ function AppContent() {
     addAuditLog(currentUser, "Tarefa Recusada", "schedule", `Recusou a tarefa para ${insp.location_name}. Motivo: ${reason}`);
     await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
       `⚠️ ${currentUser.name} RECUSOU a tarefa para ${insp.location_name}. Motivo: ${reason}`, "schedule",
-      { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser });
+      { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "taskdec:" + insp.id });
     try {
       const { dataService } = await import('./services/dataService');
       await dataService.saveInspection(merged);
@@ -598,7 +588,7 @@ function AppContent() {
     addAuditLog(user, "Folga Pedida", "schedule", `Pediu folga para ${date}`);
     await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
       `${user.name} pediu folga para ${date}.`, "schedule",
-      { excludeId: user.id, rolesOverride: ["supervisor", "admin"], sender: currentUser });
+      { excludeId: user.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "leave:" + leaveTask.id });
     try {
       const { dataService } = await import('./services/dataService');
       await dataService.saveInspection(leaveTask);
@@ -646,12 +636,12 @@ function AppContent() {
     if (merged.status === "needs_corrections") {
       await notifyEvent(NOTIF_EVENTS.INSPECTION_REJECTED, users,
         `A inspeção de ${merged.location_name} foi devolvida por ${currentUser.name}. Veja as correções necessárias.`,
-        "inspections", { excludeId: currentUser.id, sender: currentUser });
+        "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "insprej:" + merged.id });
     }
     if (merged.status === "reviewed") {
       await notifyEvent(NOTIF_EVENTS.INSPECTION_COMPLETED, users,
         `Uma inspeção (${merged.location_name}) foi aprovada por ${currentUser.name}. Pronta para envio ao cliente.`,
-        "inspections", { excludeId: currentUser.id, sender: currentUser });
+        "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "inspdone:" + merged.id });
     }
     try {
       const { dataService } = await import('./services/dataService');
@@ -696,7 +686,7 @@ function AppContent() {
           await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
             `Nova tarefa agendada para ${task.date} no local ${task.location_name}.`, "schedule",
             { rolesOverride: ["inspector"], excludeId: currentUser.id, sender: currentUser,
-              singleUser: String(task.inspector_id) });
+              singleUser: String(task.inspector_id), dedupeKey: "tasksch:" + task.id });
         }
       }
     } catch (error) { console.error("Erro ao salvar despacho no Supabase:", error); }
@@ -728,7 +718,7 @@ function AppContent() {
           await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
             `Nova tarefa agendada para ${task.date} no local ${task.location_name}.`, "schedule",
             { rolesOverride: ["inspector"], excludeId: currentUser.id, sender: currentUser,
-              singleUser: String(task.inspector_id) });
+              singleUser: String(task.inspector_id), dedupeKey: "tasksch:" + task.id });
         }
       }
     } catch (error) { console.error("Erro ao salvar despacho múltiplo no Supabase:", error); }

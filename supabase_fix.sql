@@ -1,5 +1,12 @@
 -- ============================================================================
 -- FIMS — CORREÇÃO DE NOTIFICAÇÕES, MENSAGENS E DEFEITOS (ESCALONAMENTO)
+-- ⚠️ DEPRECATED (2026-10-27): este ficheiro foi SUBSTITUÍDO por
+--    supabase/migrations/20261027_remediation_security_identity_escalation.sql
+--    que remove as políticas allow-all abaixo (falha de segurança SEC-001),
+--    protege credenciais (SEC-002/003), fixa a identidade canónica (IDN-001)
+--    e adiciona o escalonamento server-side (ESC-001..003).
+--    Aplique a migração nova no SQL Editor; este ficheiro mantém-se apenas
+--    por histórico. NÃO execute depois de aplicar a nova migração.
 -- ============================================================================
 -- Contexto: a aplicação FIMS autentica com a chave anon (não usa Supabase Auth
 -- para sessões), pelo que as tabelas de comunicação precisam de políticas RLS

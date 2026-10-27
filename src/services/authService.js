@@ -1,17 +1,73 @@
 // /src/services/authService.js
-import { supabase } from '../lib/supabase';
+// ============================================================================
+// Autenticação FIMS.
+//
+// REMEDIAÇÃO (audit SEC-002/SEC-003/IDN-001/UAF-001):
+//  • Login via RPC fims_login — a senha é verificada NA BASE DE DADOS
+//    (pgcrypto bcrypt) e NUNCA devolve password/password_hash ao cliente.
+//    Fallback: fluxo legado (pré-migração) mantido para zero downtime.
+//  • Senhas legadas em texto plano são convertidas para bcrypt no 1º login
+//    (dentro do RPC, na BD).
+//  • Identidade canónica: fims_users.user_id (formato 'usr_*') é o ID
+//    autoritativo usado em notificações, mensagens, defeitos e sessões.
+//  • CRUD de utilizadores via RPCs fims_save_user / fims_delete_user
+//    (hash server-side, validação de role/email). Fallback legado mantido.
+//  • authService.signUp implementado (antes não existia e o SignUp falhava).
+// ============================================================================
+import { supabase, rpcWithFallback } from '../lib/supabase';
 
-/**
- * Serviço de autenticação com Supabase
- * Mantém compatibilidade com o sistema existente
- */
+/** Converte uma linha fims_users para o formato de sessão, SEM credenciais */
+function toSessionUser(row) {
+  // ID canónico: user_id ('usr_*'); fallback para id numérico apenas em BD
+  // ainda não migradas (sem user_id preenchido).
+  const canonicalId = row.user_id || (row.id != null ? String(row.id) : null);
+  const name = row.name || 'Usuário';
+  return {
+    id: canonicalId,
+    dbId: row.id != null ? row.id : undefined,
+    name,
+    email: row.email,
+    role: row.role || 'inspector',
+    active: row.active !== false,
+    avatar: row.avatar || name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
+  };
+}
+
 export const authService = {
   /**
-   * Login com email e senha
+   * Login com email e senha.
+   * Preferencial: RPC fims_login (hash verificado na BD).
+   * Fallback: consulta direta (BD pré-migração) com bcrypt no cliente.
    */
   async login(email, password) {
+    // 1) Caminho seguro (RPC)
     try {
-      // Buscar usuário pelo email na tabela fims_users
+      const { data, error, usedRpc } = await rpcWithFallback('fims_login', {
+        p_email: email, p_password: password,
+      }, null);
+
+      if (usedRpc) {
+        if (error) {
+          return { success: false, error: 'Erro ao conectar ao servidor' };
+        }
+        const payload = typeof data === 'string' ? JSON.parse(data) : data;
+        if (!payload || payload.error || !payload.user) {
+          return { success: false, error: (payload && payload.error) || 'Email ou senha incorretos' };
+        }
+        const user = payload.user;
+        localStorage.setItem('fims_current_user', JSON.stringify(user));
+        await this.logActivity(user.id, 'Login', 'login', 'Entrou no sistema');
+        return { success: true, user };
+      }
+    } catch (e) { /* cai para o fallback */ }
+
+    // 2) Fallback legado (BD sem a migração) — mesmo comportamento de antes
+    return this.loginLegacy(email, password);
+  },
+
+  /** Fluxo legado: seleciona o utilizador e compara a senha no cliente. */
+  async loginLegacy(email, password) {
+    try {
       const { data: users, error } = await supabase
         .from('fims_users')
         .select('*')
@@ -20,117 +76,85 @@ export const authService = {
         .limit(1);
 
       if (error) {
-        console.error('Erro na consulta:', error);
-        // Se a tabela não existir, tentar autenticação Supabase Auth
         return this.loginWithSupabaseAuth(email, password);
       }
 
       if (!users || users.length === 0) {
-        // Tentar autenticação com Supabase Auth
         return this.loginWithSupabaseAuth(email, password);
       }
 
       const user = users[0];
 
-      // Verificar senha (se tiver hash)
       if (user.password_hash) {
-        // Importar bcrypt dinamicamente
         const bcrypt = await import('bcryptjs');
         const isValid = await bcrypt.default.compare(password, user.password_hash);
-        
         if (!isValid) {
-          return { 
-            success: false, 
-            error: 'Senha incorreta' 
-          };
+          return { success: false, error: 'Senha incorreta' };
+        }
+      } else if (user.password !== undefined && user.password !== null) {
+        if (user.password !== password) {
+          return { success: false, error: 'Senha incorreta' };
         }
       } else {
-        // Se não tiver hash, comparar texto plano (para compatibilidade)
-        if (user.password !== password) {
-          return { 
-            success: false, 
-            error: 'Senha incorreta' 
-          };
-        }
+        return this.loginWithSupabaseAuth(email, password);
       }
 
-      // Remover campos sensíveis
-      const { password_hash, password: pwd, ...userData } = user;
-
-      // Converter para o formato esperado pelo sistema
-      const formattedUser = {
-        id: userData.user_id || userData.id,
-        name: userData.name,
-        email: userData.email,
-        role: userData.role || 'inspector',
-        active: userData.active !== false,
-        avatar: userData.avatar || userData.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
-      };
-
-      // Salvar no localStorage
+      const formattedUser = toSessionUser(user);
       localStorage.setItem('fims_current_user', JSON.stringify(formattedUser));
-
-      // Registrar login
       await this.logActivity(formattedUser.id, 'Login', 'login', 'Entrou no sistema');
-
-      return { 
-        success: true, 
-        user: formattedUser 
-      };
-
+      return { success: true, user: formattedUser };
     } catch (error) {
-      console.error('Erro no login:', error);
-      
-      // Fallback: tentar login com Supabase Auth
       return this.loginWithSupabaseAuth(email, password);
     }
   },
 
   /**
-   * Login com Supabase Auth (fallback)
+   * Login com Supabase Auth (fallback).
+   * ID canónico continua a ser fims_users.user_id quando a linha existir.
    */
   async loginWithSupabaseAuth(email, password) {
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
-        return { 
-          success: false, 
-          error: 'Email ou senha incorretos' 
-        };
+        return { success: false, error: 'Email ou senha incorretos' };
       }
 
-      // Buscar dados adicionais do usuário
       const { data: userData } = await supabase
         .from('fims_users')
-        .select('*')
+        .select('id, user_id, name, email, role, active, avatar')
         .eq('email', email)
-        .single();
+        .maybeSingle();
 
       const user = {
-        id: data.user.id,
-        name: userData?.name || data.user.email?.split('@')[0] || 'Usuário',
+        id: (userData && userData.user_id) || data.user.id, // canónico quando existir
+        dbId: userData ? userData.id : undefined,
+        name: (userData && userData.name) || data.user.email?.split('@')[0] || 'Usuário',
         email: data.user.email,
-        role: userData?.role || 'inspector',
+        role: (userData && userData.role) || 'inspector',
         active: true,
-        avatar: userData?.avatar || data.user.email?.substring(0, 2).toUpperCase() || 'US'
+        avatar: (userData && userData.avatar) || data.user.email?.substring(0, 2).toUpperCase() || 'US',
       };
 
       localStorage.setItem('fims_current_user', JSON.stringify(user));
-      
       await this.logActivity(user.id, 'Login', 'login', 'Entrou no sistema (Supabase Auth)');
-
       return { success: true, user };
-
     } catch (error) {
-      return { 
-        success: false, 
-        error: 'Erro ao conectar ao servidor' 
-      };
+      return { success: false, error: 'Erro ao conectar ao servidor' };
     }
+  },
+
+  /**
+   * Criar conta (página SignUp) — antes este método NÃO EXISTIA e o fluxo
+   * falhava sempre. Cria utilizador com role 'inspector'.
+   */
+  async signUp(email, password, name) {
+    if (!email || !password || password.length < 6) {
+      return { success: false, error: 'Email e senha (mín. 6 caracteres) obrigatórios' };
+    }
+    const create = await this.createUser({ name: name || email.split('@')[0], email, password, role: 'inspector' });
+    if (!create.success) return create;
+    return { success: true, user: create.user, message: 'Conta criada com sucesso! Já pode entrar.' };
   },
 
   /**
@@ -141,20 +165,10 @@ export const authService = {
       if (userId) {
         await this.logActivity(userId, 'Logout', 'logout', 'Saiu do sistema');
       }
-
       localStorage.removeItem('fims_current_user');
-      
-      // Tentar logout do Supabase Auth
-      try {
-        await supabase.auth.signOut();
-      } catch (e) {
-        // Ignorar erro se não estiver usando Supabase Auth
-      }
-
+      try { await supabase.auth.signOut(); } catch (e) { /* sem sessão Supabase Auth */ }
       return { success: true };
-
     } catch (error) {
-      console.error('Erro no logout:', error);
       return { success: false, error: error.message };
     }
   },
@@ -164,14 +178,9 @@ export const authService = {
    */
   async logActivity(userId, action, type, detail) {
     try {
-      // Buscar nome do usuário
       let userName = 'Usuário';
-      
-      // Tentar buscar do localStorage primeiro
       const currentUser = JSON.parse(localStorage.getItem('fims_current_user') || 'null');
-      if (currentUser) {
-        userName = currentUser.name;
-      }
+      if (currentUser) userName = currentUser.name;
 
       const logEntry = {
         id: Date.now() + Math.random() * 1000,
@@ -179,301 +188,212 @@ export const authService = {
         user: userName,
         action,
         type,
-        detail
+        detail,
       };
 
-      // Salvar no localStorage (cache)
       const logs = JSON.parse(localStorage.getItem('fims_logs') || '[]');
       logs.unshift(logEntry);
       localStorage.setItem('fims_logs', JSON.stringify(logs.slice(0, 1000)));
 
-      // Opcional: Salvar no Supabase
       try {
-        await supabase
-          .from('fims_logs')
-          .insert([{
-            user_id: userId,
-            user_name: userName,
-            action,
-            type,
-            detail,
-            timestamp: new Date().toISOString()
-          }]);
-      } catch (e) {
-        // Ignorar erro se tabela não existir
-      }
+        await supabase.from('fims_logs').insert([{
+          user_id: userId,
+          user_name: userName,
+          action,
+          type,
+          detail,
+          timestamp: new Date().toISOString(),
+        }]);
+      } catch (e) { /* tabela pode não existir */ }
 
       return { success: true };
-
     } catch (error) {
-      console.error('Erro ao registrar log:', error);
       return { success: false, error: error.message };
     }
   },
 
   /**
-   * Buscar todos os usuários do Supabase
+   * Buscar todos os utilizadores — APENAS colunas seguras (nunca credenciais).
+   * id canónico = user_id ('usr_*').
    */
   async fetchAllUsers() {
     try {
       const { data, error } = await supabase
         .from('fims_users')
-        .select('*')
+        .select('id, user_id, name, email, role, active, avatar')
         .order('name');
 
       if (error) {
-        // Se tabela não existir, retornar seed users
         const seedUsers = JSON.parse(localStorage.getItem('fims_users') || '[]');
         return { success: true, users: seedUsers };
       }
 
-      // Converter para o formato esperado
-      const users = data.map(u => ({
-        id: u.user_id || u.id,
-        name: u.name,
-        email: u.email,
-        role: u.role || 'inspector',
-        active: u.active !== false,
-        avatar: u.avatar || u.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
-      }));
-
+      const users = (data || []).map(u => toSessionUser(u));
       return { success: true, users };
-
     } catch (error) {
-      console.error('Erro ao buscar usuários:', error);
       return { success: false, error: error.message };
     }
   },
 
   /**
-   * Criar um novo usuário
+   * Criar um novo utilizador — RPC fims_save_user (hash server-side).
+   * Fallback: fluxo legado com bcrypt no cliente (BD pré-migração).
    */
   async createUser(userData) {
-    try {
+    const payload = {
+      p_data: {
+        name: userData.name,
+        email: userData.email,
+        password: userData.password,
+        role: userData.role || 'inspector',
+        active: userData.active !== false,
+      },
+    };
+
+    const { data, error, usedRpc } = await rpcWithFallback('fims_save_user', payload, async () => {
+      // Fallback legado (pré-migração): hash no cliente + insert direto
       const bcrypt = await import('bcryptjs');
       const salt = await bcrypt.default.genSalt(10);
       const passwordHash = await bcrypt.default.hash(userData.password, salt);
-
       const newUser = {
         user_id: `user_${Date.now()}`,
         name: userData.name,
         email: userData.email,
         password_hash: passwordHash,
         role: userData.role || 'inspector',
-        active: true,
-        avatar: userData.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+        active: userData.active !== false,
+        avatar: userData.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase(),
       };
+      const { data: d, error: e } = await supabase.from('fims_users').insert([newUser]).select('*');
+      if (e) throw e;
+      return { user: toSessionUser(d[0]) };
+    });
 
-      const { data, error } = await supabase
-        .from('fims_users')
-        .insert([newUser])
-        .select('*');
-
-      if (error) throw error;
-
-      const { password_hash, ...createdUser } = data[0];
-
-      return { 
-        success: true, 
-        user: {
-          id: createdUser.user_id,
-          name: createdUser.name,
-          email: createdUser.email,
-          role: createdUser.role,
-          active: true,
-          avatar: createdUser.avatar
-        }
-      };
-
-    } catch (error) {
-      console.error('Erro ao criar usuário:', error);
-      return { 
-        success: false, 
-        error: error.message || 'Erro ao criar usuário' 
-      };
+    if (error) {
+      return { success: false, error: error.message || 'Erro ao criar utilizador' };
     }
+    const out = typeof data === 'string' ? JSON.parse(data) : data;
+    if (!out || out.error) {
+      return { success: false, error: (out && out.error) || 'Erro ao criar utilizador' };
+    }
+    return { success: true, user: toSessionUser(out.user) };
   },
 
   /**
-   * Atualizar um usuário
+   * Atualizar um utilizador — RPC fims_save_user; fallback legado.
    */
   async updateUser(userId, updates) {
-    try {
-      // Se estiver atualizando a senha
-      if (updates.password) {
+    const payload = {
+      p_data: {
+        user_id: userId,
+        name: updates.name,
+        email: updates.email,
+        role: updates.role,
+        active: updates.active,
+        avatar: updates.avatar,
+        password: updates.password || null,
+      },
+    };
+
+    const { data, error, usedRpc } = await rpcWithFallback('fims_save_user', payload, async () => {
+      const patch = { ...updates, updated_at: new Date().toISOString() };
+      if (patch.password) {
         const bcrypt = await import('bcryptjs');
         const salt = await bcrypt.default.genSalt(10);
-        updates.password_hash = await bcrypt.default.hash(updates.password, salt);
-        delete updates.password;
+        patch.password_hash = await bcrypt.default.hash(patch.password, salt);
+        delete patch.password;
       }
-
-      const { data, error } = await supabase
+      const { data: d, error: e } = await supabase
         .from('fims_users')
-        .update({
-          ...updates,
-          updated_at: new Date().toISOString()
-        })
+        .update(patch)
         .eq('user_id', userId)
         .select('*');
+      if (e) throw e;
+      return { user: d && d[0] ? d[0] : null }; // linha crua; formatada depois
+    });
 
-      if (error) throw error;
-
-      const { password_hash, ...updatedUser } = data[0];
-
-      // Atualizar usuário no localStorage se for o atual
-      const currentUser = JSON.parse(localStorage.getItem('fims_current_user') || 'null');
-      if (currentUser && currentUser.id === userId) {
-        const updated = {
-          id: updatedUser.user_id,
-          name: updatedUser.name,
-          email: updatedUser.email,
-          role: updatedUser.role,
-          active: updatedUser.active !== false,
-          avatar: updatedUser.avatar
-        };
-        localStorage.setItem('fims_current_user', JSON.stringify(updated));
-      }
-
-      return { 
-        success: true, 
-        user: {
-          id: updatedUser.user_id,
-          name: updatedUser.name,
-          email: updatedUser.email,
-          role: updatedUser.role,
-          active: updatedUser.active !== false,
-          avatar: updatedUser.avatar
-        }
-      };
-
-    } catch (error) {
-      console.error('Erro ao atualizar usuário:', error);
-      return { 
-        success: false, 
-        error: error.message 
-      };
+    if (error) {
+      return { success: false, error: error.message };
     }
+    const out = typeof data === 'string' ? JSON.parse(data) : data;
+    if (!out || out.error) {
+      return { success: false, error: (out && out.error) || 'Erro ao atualizar utilizador' };
+    }
+    const updatedUser = toSessionUser(out.user);
+
+    const currentUser = JSON.parse(localStorage.getItem('fims_current_user') || 'null');
+    if (currentUser && currentUser.id === userId) {
+      localStorage.setItem('fims_current_user', JSON.stringify(updatedUser));
+    }
+    return { success: true, user: updatedUser };
   },
 
   /**
-   * Ativar/Desativar um usuário
+   * Ativar/Desativar um utilizador
    */
   async toggleUserStatus(userId, active) {
-    try {
-      const { data, error } = await supabase
-        .from('fims_users')
-        .update({ 
-          active, 
-          updated_at: new Date().toISOString() 
-        })
-        .eq('user_id', userId)
-        .select('*');
-
-      if (error) throw error;
-
-      const { password_hash, ...updatedUser } = data[0];
-
-      return { 
-        success: true, 
-        user: {
-          id: updatedUser.user_id,
-          name: updatedUser.name,
-          email: updatedUser.email,
-          role: updatedUser.role,
-          active: updatedUser.active !== false,
-          avatar: updatedUser.avatar
-        }
-      };
-
-    } catch (error) {
-      console.error('Erro ao alterar status:', error);
-      return { 
-        success: false, 
-        error: error.message 
-      };
-    }
+    return this.updateUser(userId, { active });
   },
 
   /**
-   * Remover um usuário
+   * Remover um utilizador — RPC fims_delete_user; fallback legado.
    */
   async deleteUser(userId) {
-    try {
-      const { error } = await supabase
-        .from('fims_users')
-        .delete()
-        .eq('user_id', userId);
+    const { data, error, usedRpc } = await rpcWithFallback('fims_delete_user', { p_user_id: userId }, async () => {
+      const { error: e } = await supabase.from('fims_users').delete().eq('user_id', userId);
+      if (e) throw e;
+      return { ok: true };
+    });
 
-      if (error) throw error;
-
-      // Se for o usuário atual, fazer logout
-      const currentUser = JSON.parse(localStorage.getItem('fims_current_user') || 'null');
-      if (currentUser && currentUser.id === userId) {
-        await this.logout(userId);
-      }
-
-      return { success: true };
-
-    } catch (error) {
-      console.error('Erro ao remover usuário:', error);
-      return { 
-        success: false, 
-        error: error.message 
-      };
+    if (error) {
+      return { success: false, error: error.message };
     }
+    const out = typeof data === 'string' ? JSON.parse(data) : data;
+    if (!out || out.error) {
+      return { success: false, error: (out && out.error) || 'Erro ao remover utilizador' };
+    }
+
+    const currentUser = JSON.parse(localStorage.getItem('fims_current_user') || 'null');
+    if (currentUser && currentUser.id === userId) {
+      await this.logout(userId);
+    }
+    return { success: true };
   },
 
   /**
-   * Sincronizar usuários locais para o Supabase
+   * Sincronizar utilizadores locais para o Supabase
    */
   async syncLocalUsers() {
     try {
       const localUsers = JSON.parse(localStorage.getItem('fims_users') || '[]');
-      
       if (localUsers.length === 0) {
-        return { success: true, message: 'Nenhum usuário local para sincronizar' };
+        return { success: true, message: 'Nenhum utilizador local para sincronizar' };
       }
 
-      const bcrypt = await import('bcryptjs');
       let successCount = 0;
       let errorCount = 0;
 
       for (const user of localUsers) {
         try {
-          const salt = await bcrypt.default.genSalt(10);
-          const passwordHash = await bcrypt.default.hash('fims2025', salt);
-
-          const { error } = await supabase
-            .from('fims_users')
-            .upsert({
-              user_id: `user_${user.id}`,
-              name: user.name,
-              email: user.email,
-              password_hash: passwordHash,
-              role: user.role || 'inspector',
-              active: user.active !== false,
-              avatar: user.avatar || user.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
-            }, { onConflict: 'email' });
-
-          if (error) {
-            errorCount++;
-          } else {
-            successCount++;
-          }
+          // senha padrão redefinida via RPC (hash server-side); fallback legado
+          const res = await this.createUser({
+            name: user.name,
+            email: user.email,
+            password: 'fims2025',
+            role: user.role || 'inspector',
+            active: user.active !== false,
+          });
+          if (res.success) successCount++; else errorCount++;
         } catch (e) {
           errorCount++;
         }
       }
 
-      return { 
-        success: true, 
-        syncCount: successCount,
-        errorCount
-      };
-
+      return { success: true, syncCount: successCount, errorCount };
     } catch (error) {
-      console.error('Erro ao sincronizar usuários:', error);
       return { success: false, error: error.message };
     }
   }
 };
+
+export default authService;

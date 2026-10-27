@@ -52,28 +52,30 @@ export const dataService = {
 
   async fetchUsers() {
     try {
+      // ID canónico: fims_users.user_id ('usr_*') — corrige IDN-001.
+      // O id numérico vai em dbId apenas para referência interna.
       const { data, error } = await supabase
         .from('fims_users')
-        .select('id, name, email, role, active');
-        
-      if (error) { 
-        console.warn('[dataService] fetchUsers error:', error.message); 
-        return { success: false, users: [] }; 
+        .select('id, user_id, name, email, role, active');
+
+      if (error) {
+        console.warn('[dataService] fetchUsers error:', error.message);
+        return { success: false, users: [] };
       }
-      
+
       const users = (data || []).map(row => ({
-        id: row.id,
+        id: row.user_id || String(row.id), // canónico
+        dbId: row.id,
         name: row.name || 'Sem Nome',
         email: row.email || '',
         role: row.role || 'inspector',
         active: row.active !== false
       }));
-      
-      console.log(`[dataService] Fetched ${users.length} users from fims_users`);
+
       return { success: true, users };
-    } catch (error) { 
-      console.error('[dataService] fetchUsers exception:', error); 
-      return { success: false, users: [] }; 
+    } catch (error) {
+      console.error('[dataService] fetchUsers exception:', error);
+      return { success: false, users: [] };
     }
   },
 

@@ -3,11 +3,13 @@
 // Página de Defeitos & Problemas Recorrentes.
 //  - Dados sincronizados do Supabase (fims_defects) → visíveis em todos os
 //    dispositivos (CEO/supervisores veem o mesmo estado).
-//  - Escalonamento: SLA 48h → escalado; re-escala a cada 24h (global timer no
-//    App + verificação local nesta página).
+//  - Escalonamento: SLA 48h → escalado; re-escala a cada 24h — DECIDIDO E
+//    EXECUTADO NO SERVIDOR (pg_cron + fims_escalate_overdue_defects), que
+//    também cria as notificações/mensagens (CEO incluído sempre). Esta página
+//    apenas refresca dados (leitura) e dispara escalação manual via RPC.
 //  - Ações: Re-escalar agora / Marcar como resolvido.
 // ============================================================================
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { Icon } from "../lib/icons";
 import { ROLES } from "../data/constants";
 import defectService from "../services/defectService";
@@ -37,23 +39,12 @@ export default function Defects({ currentUser, users = [] }) {
   const [, setTick] = useState(0);
   const canManage = currentUser && [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR].includes(currentUser.role);
 
-  const notifyEscalation = useCallback(async (d) => {
-    const isRe = (d.escalation_count || 0) > 1;
-    const msg = (isRe ? "🚨 RE-ESCALAÇÃO (" + d.escalation_count + "ª vez): " : "🚨 ESCALONAMENTO (48h): ") +
-      '"' + d.item_label + '" em ' + d.location_name + " continua em aberto após o prazo. Escalado ao CEO.";
-    await notifyEvent(NOTIF_EVENTS.DEFECT_ESCALATED, users, msg, "defects", {
-      excludeId: currentUser?.id, sender: currentUser,
-    });
-  }, [notifyEvent, users, currentUser]);
-
+  // REFRESH-ONLY: o escalonamento corre no servidor (pg_cron). Aqui apenas
+  // recarregamos os dados para a UI refletir escalonamentos feitos no servidor.
   useEffect(() => {
     let alive = true;
     const run = async () => {
       try {
-        const escalated = await defectService.autoEscalate();
-        if (alive && escalated.length) {
-          for (const d of escalated) await notifyEscalation(d);
-        }
         const all = await defectService.getAll();
         if (alive) { setDefects(all); setLoading(false); }
       } catch (e) {
@@ -63,25 +54,27 @@ export default function Defects({ currentUser, users = [] }) {
     run();
     const iv = setInterval(run, 60000);
     return () => { alive = false; clearInterval(iv); };
-  }, [notifyEscalation]);
+  }, []);
 
   const handleEscalateNow = async (d) => {
     setBusyId(d.id);
     try {
-      const updated = await defectService.escalateNow(d.id);
-      if (updated) await notifyEscalation(updated);
+      // RPC idempotente no servidor (fims_escalate_defect) — o servidor cria
+      // as notificações/mensagens com dedupe; o cliente não notifica.
+      await defectService.escalateNow(d.id);
       setDefects(await defectService.getAll());
+      setTick(t => t + 1);
     } finally { setBusyId(null); }
   };
 
   const handleResolve = async (d) => {
     setBusyId(d.id);
     try {
-      const updated = await defectService.resolveManually(d.id, currentUser?.id);
-      if (updated) {
+      const res = await defectService.resolveManually(d.id, currentUser?.id);
+      if (res && res.ok) {
         const msg = "✅ DEFEITO RESOLVIDO (manual): \"" + d.item_label + "\" em " + d.location_name + " foi marcado como resolvido por " + (currentUser?.name || "gestor") + ".";
         await notifyEvent(NOTIF_EVENTS.DEFECT_RESOLVED, users, msg, "defects", {
-          excludeId: currentUser?.id, sender: currentUser,
+          excludeId: currentUser?.id, sender: currentUser, dedupeKey: "defres:" + d.id + ":" + (d.resolved_at || "manual"),
         });
       }
       setDefects(await defectService.getAll());

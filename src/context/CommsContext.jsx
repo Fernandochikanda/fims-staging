@@ -1,21 +1,24 @@
 // src/context/CommsContext.jsx
 // ============================================================================
-// FIMS — Centro de comunicação (notificações + mensagens).
+// FIMS — Centro de comunicação (notificações + mensagens + anúncios).
 //
-// CORREÇÕES principais (versão anterior):
-//  1. Mensagens eram 100% localStorage → o destinatário nunca recebia.
-//     Agora: persistidas no Supabase (fims_messages) + Realtime + polling.
-//  2. notify() adicionava a notificação ao REMETENTE (poluição) e duplicava ids.
-//     Agora: grava apenas no Supabase com id determinístico; o destinatário
-//     recebe via Realtime/polling. Falhas ficam em outbox com retry.
-//  3. Sem polling de segurança → notificações perdidas se o Realtime caísse.
-//     Agora: polling periódico + flush do outbox.
+// REMEDIAÇÃO (audit MSG-001..004 / NOTIF-001..003 / ANN-001 / SEC-001):
+//  • A app já NÃO descarrega as mensagens de todos os utilizadores: todas as
+//    consultas são filtradas por destinatário (to_id = eu, from_id = eu ou
+//    broadcast). O realtime também é filtrado (dois handlers com filter).
+//  • Read receipts POR DESTINATÁRIO (fims_message_reads): ler um broadcast não
+//    o marca como lido para os outros. Unread counts derivados dos receipts.
+//  • Escritas via RPCs (fims_send_message / fims_notify) com dedupe por
+//    client_msg_id / dedupe_key. Fallbacks mantêm o fluxo pré-migração.
+//  • Mensagens falhadas ficam com `pending: true` — já não há "falso sucesso".
+//  • Anúncios persistidos no servidor (announcementService) com fallback local.
 // ============================================================================
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { genId } from '../lib/helpers';
-import { supabase } from '../lib/supabase';
+import { supabase, TABLES, rpcWithFallback } from '../lib/supabase';
 import { notificationService } from '../services/notificationService';
+import announcementService from '../services/announcementService';
 import settingsService, { NOTIF_EVENTS } from '../services/settingsService';
 
 const CommsContext = createContext();
@@ -37,7 +40,7 @@ const FLUSH_OUTBOX_MS = 60000;
 // ---------------------------------------------------------------------------
 // Helpers de persistência de mensagens (Supabase fims_messages)
 // Schema: id bigint identity, from_id, to_id, text, created_at
-//         (+ read, sender_name, role_filter, client_msg_id — criados no SQL fix)
+//         (+ read, sender_name, role_filter, client_msg_id)
 // ---------------------------------------------------------------------------
 function toDbRow(msg) {
   const row = {
@@ -55,6 +58,7 @@ function toDbRow(msg) {
 function fromDbRow(row) {
   return {
     id: 'srv_' + row.id,
+    serverId: row.id,
     clientId: row.client_msg_id || null,
     fromId: String(row.from_id),
     toId: String(row.to_id),
@@ -64,6 +68,7 @@ function fromDbRow(row) {
     isBroadcast: String(row.to_id) === 'broadcast',
     roleFilter: row.role_filter || null,
     senderName: row.sender_name || null,
+    pending: false,
   };
 }
 
@@ -107,12 +112,16 @@ export function CommsProvider({ children, currentUser }) {
     } catch (e) { return []; }
   });
 
+  const [myReads, setMyReads] = useState(() => new Set());
   const [draft, setDraft] = useState(() => localStorage.getItem(STORAGE_KEYS.DRAFT) || '');
-  const [commsStatus, setCommsStatus] = useState('connecting'); // connecting | online | offline
+  const [commsStatus, setCommsStatus] = useState('connecting');
 
   const currentUserId = currentUser?.id != null ? String(currentUser.id) : null;
+  const currentUserRole = currentUser?.role || null;
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  const myReadsRef = useRef(myReads);
+  myReadsRef.current = myReads;
 
   // ==========================================================================
   // PERSISTÊNCIA LOCAL (cache)
@@ -173,7 +182,10 @@ export function CommsProvider({ children, currentUser }) {
         const k = m.clientId ? 'c_' + m.clientId : 'i_' + m.id;
         const existing = byKey.get(k);
         if (!existing) { byKey.set(k, m); changed = true; }
-        else if (m.read !== existing.read) { byKey.set(k, { ...existing, read: m.read }); changed = true; }
+        else if (m.read !== existing.read || m.pending !== existing.pending) {
+          byKey.set(k, { ...existing, read: m.read, pending: m.pending === true });
+          changed = true;
+        }
       });
       if (!changed) return prev;
       return [...byKey.values()].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
@@ -181,7 +193,7 @@ export function CommsProvider({ children, currentUser }) {
   }, []);
 
   // ==========================================================================
-  // ARRANQUE — carregar config, notificações, mensagens, realtime, polling
+  // ARRANQUE — carregar config, notificações, mensagens, receipts, realtime
   // ==========================================================================
   useEffect(() => {
     if (!currentUserId) return;
@@ -191,6 +203,31 @@ export function CommsProvider({ children, currentUser }) {
     let unsubMsgChannel = null;
     const timers = [];
 
+    /** Consulta SCOPED: só mensagens dirigidas a mim, minhas, ou broadcasts (MSG-002) */
+    function myMessagesQuery(limit) {
+      return supabase
+        .from(TABLES.MESSAGES)
+        .select('*')
+        .or('to_id.eq.' + currentUserId + ',from_id.eq.' + currentUserId + ',to_id.eq.broadcast')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+    }
+
+    async function loadMyReads() {
+      try {
+        const { data, error } = await supabase
+          .from(TABLES.MESSAGE_READS)
+          .select('message_id')
+          .eq('user_id', currentUserId)
+          .limit(5000);
+        if (!error && Array.isArray(data)) {
+          if (!cancelled) setMyReads(new Set(data.map(r => String(r.message_id))));
+          return true;
+        }
+      } catch (e) { /* tabela pode não existir (pré-migração) */ }
+      return false;
+    }
+
     async function boot() {
       // 0) Config de notificações (partilhada)
       settingsService.load();
@@ -199,13 +236,12 @@ export function CommsProvider({ children, currentUser }) {
       const notifs = await notificationService.fetchForUser(currentUserId);
       if (!cancelled) mergeNotifications(notifs);
 
-      // 2) Mensagens do servidor
+      // 2) Read receipts do utilizador (por destinatário)
+      loadMyReads();
+
+      // 3) Mensagens DO UTILIZADOR (scoped)
       try {
-        const { data, error } = await supabase
-          .from('fims_messages')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(500);
+        const { data, error } = await myMessagesQuery(500);
         if (!error && Array.isArray(data)) {
           const serverMsgs = data.map(fromDbRow).reverse();
           if (!cancelled) mergeMessages(serverMsgs);
@@ -217,34 +253,57 @@ export function CommsProvider({ children, currentUser }) {
         setCommsStatus('offline');
       }
 
-      // 3) Flush do outbox (notificações/mensagens pendentes)
+      // 4) Anúncios persistentes (servidor + cache)
+      try {
+        const [anns, reads] = await Promise.all([
+          announcementService.load(),
+          announcementService.loadReads(currentUserId),
+        ]);
+        if (!cancelled) {
+          setAnnouncements(anns);
+          setDismissed(reads);
+        }
+      } catch (e) { /* fallback local já coberto */ }
+
+      // 5) Flush do outbox (notificações/mensagens pendentes)
       notificationService.flushOutbox().then(n => { if (n > 0) console.log('[Comms] Outbox: ' + n + ' notificações reenviadas'); });
       flushMessageOutbox();
 
-      // 4) Realtime: notificações
+      // 6) Realtime: notificações
       unsubNotif = notificationService.subscribe(currentUserId, (newNotif) => {
         mergeNotifications([newNotif]);
         notifyBrowser(newNotif.text);
       });
 
-      // 5) Realtime: mensagens dirigidas a mim + broadcasts
+      // 7) Realtime: mensagens FILTRADAS — dirigidas a mim + broadcasts
       const msgChannel = supabase
         .channel('fims-messages-' + currentUserId)
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'fims_messages' }, (payload) => {
+        .on('postgres_changes', {
+          event: 'INSERT', schema: 'public', table: TABLES.MESSAGES,
+          filter: 'to_id=eq.' + currentUserId,
+        }, (payload) => {
           if (!payload.new) return;
-          const row = payload.new;
-          const isForMe = String(row.to_id) === currentUserId || String(row.to_id) === 'broadcast';
-          if (!isForMe) return;
-          if (String(row.from_id) === currentUserId) return;
-          mergeMessages([fromDbRow(row)]);
-          notifyBrowser(row.text);
+          if (String(payload.new.from_id) === currentUserId) return;
+          mergeMessages([fromDbRow(payload.new)]);
+          notifyBrowser(payload.new.text);
+        })
+        .on('postgres_changes', {
+          event: 'INSERT', schema: 'public', table: TABLES.MESSAGES,
+          filter: 'to_id=eq.broadcast',
+        }, (payload) => {
+          if (!payload.new) return;
+          if (String(payload.new.from_id) === currentUserId) return;
+          const row = fromDbRow(payload.new);
+          if (row.roleFilter && row.roleFilter !== currentUserRole) return;
+          mergeMessages([row]);
+          notifyBrowser(payload.new.text);
         })
         .subscribe((status) => {
           if (status === 'SUBSCRIBED') setCommsStatus('online');
         });
       unsubMsgChannel = () => { try { supabase.removeChannel(msgChannel); } catch (e) {} };
 
-      // 6) Polling de segurança
+      // 8) Polling de segurança (scoped; nunca busca mensagens de outros)
       timers.push(setInterval(async () => {
         const fresh = await notificationService.fetchForUser(currentUserId, 60);
         if (!cancelled) mergeNotifications(fresh);
@@ -257,11 +316,7 @@ export function CommsProvider({ children, currentUser }) {
 
       timers.push(setInterval(async () => {
         try {
-          const { data, error } = await supabase
-            .from('fims_messages')
-            .select('*')
-            .order('created_at', { ascending: false })
-            .limit(200);
+          const { data, error } = await myMessagesQuery(200);
           if (!error && Array.isArray(data)) {
             if (!cancelled) mergeMessages(data.map(fromDbRow).reverse());
           }
@@ -280,12 +335,30 @@ export function CommsProvider({ children, currentUser }) {
       const remaining = [];
       (async () => {
         for (const row of list) {
-          try {
-            const { error } = await supabase.from('fims_messages').insert([row]);
-            if (error) remaining.push(row);
-          } catch (e) { remaining.push(row); }
+          const res = await rpcWithFallback(
+            'fims_send_message',
+            {
+              p_from_id: row.from_id, p_to_id: row.to_id, p_text: row.text,
+              p_sender_name: row.sender_name || null,
+              p_role_filter: row.role_filter || null,
+              p_client_msg_id: row.client_msg_id || null,
+            },
+            async () => {
+              const { error } = await supabase.from(TABLES.MESSAGES).insert([row]);
+              if (error) throw error;
+              return null;
+            }
+          );
+          if (res.error) remaining.push(row);
         }
         writeMsgOutbox(remaining);
+        if (list.length !== remaining.length) {
+          // sucesso parcial/total: recarrega as minhas mensagens (limpa pending)
+          try {
+            const { data } = await myMessagesQuery(200);
+            if (!cancelled && Array.isArray(data)) mergeMessages(data.map(fromDbRow).reverse());
+          } catch (e) {}
+        }
       })();
     }
 
@@ -309,15 +382,14 @@ export function CommsProvider({ children, currentUser }) {
       if (unsubNotif) unsubNotif();
       if (unsubMsgChannel) unsubMsgChannel();
     };
-  }, [currentUserId, mergeNotifications, mergeMessages]);
+  }, [currentUserId, currentUserRole, mergeNotifications, mergeMessages]);
 
   // ==========================================================================
-  // NOTIFICAR — grava no Supabase para o DESTINATÁRIO (não polui o remetente)
+  // NOTIFICAR — via RPC fims_notify (dedupe opcional por dedupeKey)
   // ==========================================================================
-  const notify = useCallback(async (userId, text, link = null) => {
+  const notify = useCallback(async (userId, text, link = null, dedupeKey = null) => {
     if (userId === undefined || userId === null || userId === '') return null;
-    const res = await notificationService.send(userId, text, link);
-    // Se eu próprio for o destinatário (ex.: testes), reflete imediatamente
+    const res = await notificationService.send(userId, text, link, null, null, dedupeKey);
     if (res.notif && String(userId) === currentUserId) {
       mergeNotifications([res.notif]);
     }
@@ -327,40 +399,42 @@ export function CommsProvider({ children, currentUser }) {
     return res.notif;
   }, [currentUserId, mergeNotifications]);
 
-  /**
-   * Notifica vários destinatários segundo a configuração de um evento.
-   * (implementado mais abaixo, após sendSystemMessage)
-   */
-
   // ==========================================================================
-  // MENSAGENS — persistidas no Supabase + cache local + outbox
+  // MENSAGENS — via RPC fims_send_message + outbox + pending flag
   // ==========================================================================
   const persistMessage = useCallback(async (msg) => {
     // cache local imediata (remetente vê na hora)
-    setMessages(prev => [...prev, msg]);
+    setMessages(prev => [...prev, { ...msg, pending: false }]);
     const row = toDbRow(msg);
-    try {
-      const { data, error } = await supabase.from('fims_messages').insert([row]).select().single();
-      if (error) {
-        // tenta versão mínima (caso as colunas extra ainda não existam — SQL fix pendente)
-        const minimal = {
-          from_id: row.from_id, to_id: row.to_id, text: row.text, created_at: row.created_at,
-        };
-        const { error: err2 } = await supabase.from('fims_messages').insert([minimal]);
-        if (err2) {
-          const outbox = readMsgOutbox();
-          outbox.push(row);
-          writeMsgOutbox(outbox);
-          console.warn('[Comms] Mensagem em outbox:', err2.message);
-        }
+
+    const { error } = await rpcWithFallback(
+      'fims_send_message',
+      {
+        p_from_id: row.from_id, p_to_id: row.to_id, p_text: row.text,
+        p_sender_name: row.sender_name || null,
+        p_role_filter: row.role_filter || null,
+        p_client_msg_id: row.client_msg_id || null,
+      },
+      async () => {
+        const { error: e } = await supabase.from(TABLES.MESSAGES).insert([row]);
+        if (e) throw e;
+        return null;
       }
-    } catch (e) {
+    );
+
+    if (error) {
+      // marca como pendente (sem falso sucesso) e enfileira no outbox
+      setMessages(prev => prev.map(m =>
+        (m.clientId && m.clientId === msg.clientId) || m.id === msg.id
+          ? { ...m, pending: true } : m));
       const outbox = readMsgOutbox();
-      outbox.push(row);
-      writeMsgOutbox(outbox);
-      console.warn('[Comms] Mensagem em outbox (exceção):', e.message);
+      if (!outbox.some(r => r.client_msg_id === row.client_msg_id)) {
+        outbox.push(row);
+        writeMsgOutbox(outbox);
+      }
+      console.warn('[Comms] Mensagem pendente (outbox):', error.message);
     }
-    return msg;
+    return { ...msg, pending: !!error };
   }, []);
 
   const sendMessage = useCallback(async (fromId, toId, text, extra = {}) => {
@@ -378,18 +452,18 @@ export function CommsProvider({ children, currentUser }) {
       senderName: fromUser?.name || null,
       ...extra,
     };
-    await persistMessage(msg);
-    // notificação in-app para o destinatário
-    notify(toId, (fromUser?.name || 'Utilizador') + ': ' + t, 'messages');
-    return msg;
+    const saved = await persistMessage(msg);
+    // notificação in-app para o destinatário (dedupe por mensagem)
+    notify(toId, (fromUser?.name || 'Utilizador') + ': ' + t, 'messages', 'msg:' + msg.clientId);
+    return saved;
   }, [persistMessage, notify]);
 
-  /** Mensagem automática do sistema (ex.: fim de inspeção, escalação de defeitos) */
-  const sendSystemMessage = useCallback(async (toId, text, sender = null) => {
+  /** Mensagem automática do sistema (ex.: fim de inspeção) */
+  const sendSystemMessage = useCallback(async (toId, text, sender = null, dedupeKey = null) => {
     if (toId === undefined || toId === null || toId === '') return null;
     const msg = {
       id: genId(),
-      clientId: genId(),
+      clientId: dedupeKey ? ('sys_' + dedupeKey) : genId(),
       fromId: sender ? String(sender.id) : 'system',
       toId: String(toId),
       text,
@@ -398,27 +472,28 @@ export function CommsProvider({ children, currentUser }) {
       senderName: sender?.name || 'Sistema FIMS',
       isSystem: true,
     };
-    await persistMessage(msg);
-    return msg;
+    return await persistMessage(msg);
   }, [persistMessage]);
 
   /**
    * Notifica vários destinatários segundo a configuração de um evento.
-   * users: lista real de utilizadores (Supabase fims_users)
-   * opts.excludeId: não notificar o próprio autor
-   * opts.rolesOverride: substitui os papéis configurados
-   * opts.channelsOverride: { notification, message } — substitui canais configurados
+   * opts.dedupeKey: chave base de idempotência — cada destinatário recebe
+   * 'dedupeKey:uid' (o MESMO evento não duplica notificações/mensagens).
+   * opts.excludeId: não notificar o próprio autor (eventos ad-hoc).
+   * NOTA: no escalonamento server-side o CEO nunca é excluído (ESC-002).
    */
   const notifyEvent = useCallback(async (event, users, text, link = null, opts = {}) => {
     const channels = opts.channelsOverride || settingsService.channelsFor(event);
     const recipients = settingsService.resolveRecipients(event, users, { excludeId: opts.excludeId, rolesOverride: opts.rolesOverride });
+    const baseKey = opts.dedupeKey ? String(opts.dedupeKey) : null;
     const results = [];
     for (const uid of recipients) {
+      const key = baseKey ? baseKey + ':' + uid : null;
       if (channels.notification) {
-        results.push(await notify(uid, text, link));
+        results.push(await notify(uid, text, link, key));
       }
       if (channels.message) {
-        await sendSystemMessage(uid, text, opts.sender);
+        await sendSystemMessage(uid, text, opts.sender, key ? 'ev_' + key : null);
       }
     }
     return { recipients, channels };
@@ -441,7 +516,7 @@ export function CommsProvider({ children, currentUser }) {
       senderName: fromUser?.name || null,
     };
     await persistMessage(msg);
-    // notifica (in-app) todos exceto o autor — os destinatários reais vêm da lista "users"
+    // notifica (in-app) todos exceto o autor — destinatários da lista "users"
     const users = extra.users || [];
     if (users.length) {
       const targets = users.filter(u =>
@@ -450,7 +525,7 @@ export function CommsProvider({ children, currentUser }) {
         (!roleFilter || u.role === roleFilter)
       );
       for (const u of targets) {
-        await notify(u.id, '📢 ' + (fromUser?.name || 'Admin') + ': ' + t, 'messages');
+        await notify(u.id, '📢 ' + (fromUser?.name || 'Admin') + ': ' + t, 'messages', 'bcast:' + msg.clientId + ':' + u.id);
       }
     }
     return msg;
@@ -468,38 +543,79 @@ export function CommsProvider({ children, currentUser }) {
       .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   }, [messages]);
 
-  const markAsRead = useCallback(async (messageId) => {
-    setMessages(prev => prev.map(m => {
-      if (m.id !== messageId) return m;
-      // sincronizar leitura no servidor quando a msg tem id real
-      if (String(m.id).startsWith('srv_')) {
-        supabase.from('fims_messages').update({ read: true }).eq('id', String(m.id).slice(4))
-          .then(() => {}, () => {});
-      }
-      return { ...m, read: true };
-    }));
+  // ==========================================================================
+  // READ STATE — receipts por destinatário (MSG-001) com fallback legado
+  // ==========================================================================
+  /** A mensagem está lida PARA MIM? receipt próprio OU flag legado (pré-migração) */
+  const isReadForMe = useCallback((m) => {
+    if (m.pending) return false;
+    if (myReadsRef.current.has(String(m.serverId))) return true;
+    return m.read === true; // fallback: flag legado (dados antigos)
   }, []);
+
+  const markAsRead = useCallback(async (messageId) => {
+    const target = messagesRef.current.find(m => m.id === messageId);
+    if (target && String(target.serverId || '').match(/^\d+$/) && currentUserId) {
+      const { error } = await rpcWithFallback(
+        'fims_mark_message_read',
+        { p_message_id: Number(target.serverId), p_user_id: currentUserId },
+        async () => {
+          const { error: e } = await supabase
+            .from(TABLES.MESSAGES)
+            .update({ read: true })
+            .eq('id', Number(target.serverId));
+          if (e) throw e;
+          return null;
+        }
+      );
+      if (!error) {
+        setMyReads(prev => new Set([...prev, String(target.serverId)]));
+      }
+    }
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, read: true } : m));
+  }, [currentUserId]);
 
   const markAllAsRead = useCallback(async (userId) => {
     const uid = String(userId);
+    if (currentUserId === uid) {
+      const { error } = await rpcWithFallback(
+        'fims_mark_messages_read',
+        { p_user_id: uid },
+        async () => {
+          // fallback legado: flag partilhada (pré-migração)
+          const { error: e } = await supabase.from(TABLES.MESSAGES).update({ read: true })
+            .in('to_id', [uid, 'broadcast']).eq('read', false);
+          if (e) throw e;
+          return null;
+        }
+      );
+      if (!error) {
+        // sincroniza receipts locais: marca tudo o que me destina como lido
+        setMyReads(prev => {
+          const next = new Set(prev);
+          messagesRef.current.forEach(m => {
+            if ((m.toId === uid || m.toId === 'broadcast') && m.serverId) {
+              next.add(String(m.serverId));
+            }
+          });
+          return next;
+        });
+      }
+    }
     setMessages(prev => prev.map(m =>
-      ((m.toId === uid || m.toId === 'broadcast') && !m.read && m.fromId !== uid)
+      ((m.toId === uid || m.toId === 'broadcast') && m.fromId !== uid)
         ? { ...m, read: true } : m
     ));
-    // melhor esforço no servidor
-    try {
-      await supabase.from('fims_messages').update({ read: true })
-        .in('to_id', [uid, 'broadcast']).eq('read', false);
-    } catch (e) {}
-  }, []);
+  }, [currentUserId]);
 
   const getUnreadCount = useCallback((userId) => {
     const uid = String(userId);
     return messages.filter(m =>
       (m.toId === uid || (m.toId === 'broadcast' && (!m.roleFilter || m.roleFilter === currentUser?.role))) &&
-      !m.read && m.fromId !== uid
+      m.fromId !== uid &&
+      !isReadForMe(m)
     ).length;
-  }, [messages, currentUser]);
+  }, [messages, currentUser, isReadForMe]);
 
   const getRecentContacts = useCallback((userId) => {
     const uid = String(userId);
@@ -518,7 +634,7 @@ export function CommsProvider({ children, currentUser }) {
   }, [messages]);
 
   // ==========================================================================
-  // NOTIFICAÇÕES — marcar como lida
+  // NOTIFICAÇÕES — marcar como lida (RPC fims_notification_read)
   // ==========================================================================
   const markNotificationRead = useCallback(async (notifId) => {
     setNotifications(prev => prev.map(n => String(n.id) === String(notifId) ? { ...n, read: true } : n));
@@ -539,12 +655,14 @@ export function CommsProvider({ children, currentUser }) {
   };
 
   // ==========================================================================
-  // ANÚNCIOS (mantidos; notificações agora vão ao Supabase)
+  // ANÚNCIOS — persistidos no servidor (fallback local mantido)
   // ==========================================================================
   const createAnnouncement = useCallback((fromId, title, text, targetRole = null, extra = {}) => {
+    const fromUser = extra.fromUser || null;
     const announcement = {
       id: genId(),
       fromId,
+      fromName: fromUser?.name || null,
       title,
       text,
       timestamp: new Date().toISOString(),
@@ -552,7 +670,14 @@ export function CommsProvider({ children, currentUser }) {
       dismissedBy: [],
     };
     setAnnouncements(prev => [announcement, ...prev]);
-    const fromUser = extra.fromUser || null;
+    announcementService.create({
+      fromId: fromId != null ? String(fromId) : null,
+      fromName: fromUser?.name || null,
+      title,
+      text,
+      targetRole,
+    });
+
     const users = extra.users || [];
     (async () => {
       const targets = users.filter(u =>
@@ -560,7 +685,7 @@ export function CommsProvider({ children, currentUser }) {
         (!targetRole || u.role === targetRole)
       );
       for (const u of targets) {
-        await notify(u.id, '📢 ' + (fromUser?.name || 'Admin') + ': ' + title, 'messages');
+        await notify(u.id, '📢 ' + (fromUser?.name || 'Admin') + ': ' + title, 'messages', 'ann:' + announcement.id + ':' + u.id);
       }
     })();
     return announcement;
@@ -575,11 +700,24 @@ export function CommsProvider({ children, currentUser }) {
       }
       return a;
     }));
+    setDismissed(prev => {
+      const arr = Array.isArray(prev) ? prev : [];
+      return arr.includes(String(announcementId)) ? arr : [...arr, String(announcementId)];
+    });
+    announcementService.dismiss(announcementId, userId);
   }, []);
 
   const getUnseenAnnouncements = useCallback((userId) => {
-    return announcements.filter(a => !(a.dismissedBy || []).includes(userId));
-  }, [announcements]);
+    const uidStr = String(userId);
+    return announcements.filter(a => {
+      if ((a.dismissedBy || []).includes(userId)) return false;
+      if (dismissed.includes(String(a.id))) return false;
+      // anúncio dirigido a outro papel? não mostrar
+      if (a.targetRole && currentUser && currentUser.role !== a.targetRole) return false;
+      void uidStr;
+      return true;
+    });
+  }, [announcements, dismissed, currentUser]);
 
   const confirmAnnouncement = useCallback((announcementId, userId, extra = {}) => {
     dismissAnnouncement(announcementId, userId);
@@ -599,7 +737,7 @@ export function CommsProvider({ children, currentUser }) {
       senderName: fromUser?.name || null,
     };
     persistMessage(confirmMsg);
-    notify(announcement.fromId, (fromUser?.name || 'Utilizador') + ' confirmou recebimento: ' + announcement.title, 'messages');
+    notify(announcement.fromId, (fromUser?.name || 'Utilizador') + ' confirmou recebimento: ' + announcement.title, 'messages', 'annconf:' + announcementId + ':' + userId);
   }, [announcements, dismissAnnouncement, persistMessage, notify]);
 
   const replyToAnnouncement = useCallback((announcementId, fromId, text, extra = {}) => {
@@ -619,7 +757,7 @@ export function CommsProvider({ children, currentUser }) {
       senderName: fromUser?.name || null,
     };
     persistMessage(replyMsg);
-    notify(announcement.fromId, (fromUser?.name || 'Utilizador') + ' respondeu ao anúncio: ' + announcement.title, 'messages');
+    notify(announcement.fromId, (fromUser?.name || 'Utilizador') + ' respondeu ao anúncio: ' + announcement.title, 'messages', 'annreply:' + announcementId + ':' + fromId);
     return replyMsg;
   }, [announcements, persistMessage, notify]);
 
