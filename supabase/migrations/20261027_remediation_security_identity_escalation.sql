@@ -17,7 +17,7 @@
 -- ============================================================================
 -- 0) PRÉ-REQUISITOS
 -- ============================================================================
-CREATE EXTENSION IF NOT EXISTS pgcrypto; -- crypt()/gen_salt('bf') para hashing server-side
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions; -- crypt()/gen_salt('bf') para hashing server-side (Supabase instala extensões no schema 'extensions')
 
 -- ============================================================================
 -- 1) IDENTIDADE CANÓNICA — fims_users.user_id é o identificador autoritativo
@@ -300,7 +300,7 @@ REVOKE DELETE ON public.fims_announcement_reads FROM anon, authenticated;
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.fims_login(p_email text, p_password text)
 RETURNS jsonb
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions
 AS $$
 DECLARE
   u public.fims_users%ROWTYPE;
@@ -363,7 +363,7 @@ END $$;
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.fims_save_user(p_data jsonb)
 RETURNS jsonb
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions
 AS $$
 DECLARE
   v_user_id text := NULLIF(btrim(coalesce(p_data->>'user_id', '')), '');
