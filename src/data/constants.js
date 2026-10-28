@@ -1,5 +1,5 @@
 // /src/data/constants.js
-import { templateService } from '../services/templateService';
+import { templateService } from '../services/templateService.js';
 export const ROLES = { ADMIN: "admin", CEO: "ceo", SUPERVISOR: "supervisor", INSPECTOR: "inspector" };
 export const SEED_USERS = [
   { id: 1, name: "Sistema Admin", email: "admin@fims.co.mz", role: ROLES.ADMIN, active: true, avatar: "SA" },

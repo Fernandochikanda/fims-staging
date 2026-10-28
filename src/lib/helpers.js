@@ -1,6 +1,6 @@
 // /src/lib/helpers.js
-import { SEED_LOCATIONS } from "../data/constants";
-import { getTemplate } from "../data/clientTemplates";
+import { SEED_LOCATIONS } from "../data/constants.js";
+import { getTemplate } from "../data/clientTemplates.js";
 
 export function genId() { return Date.now() + Math.random().toString(36).slice(2); }
 

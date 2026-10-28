@@ -1,5 +1,5 @@
 // src/services/templateService.js
-import { supabase, TABLES } from '../lib/supabase';
+import { supabase, TABLES } from '../lib/supabase.js';
 
 /**
  * Serviço para gerenciar templates no Supabase

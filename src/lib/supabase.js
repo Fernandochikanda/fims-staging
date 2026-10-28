@@ -3,8 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 
 // Chave publishable/anon — pública por design; a proteção dos dados é feita
 // por RLS + RPCs SECURITY DEFINER na base de dados (ver supabase/migrations/).
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://uaspabiqnmcwohluymeb.supabase.co';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_B08e9mtpZ8BCdauYElZlQw_4dgOaszz';
+const supabaseUrl = import.meta.env?.VITE_SUPABASE_URL || 'https://uaspabiqnmcwohluymeb.supabase.co';
+const supabaseAnonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY || 'sb_publishable_B08e9mtpZ8BCdauYElZlQw_4dgOaszz';
 
 // NOTA: NÃO forçamos o header 'Authorization: Bearer <anon>' — isso impedia que
 // sessões Supabase Auth (fallback login) fossem enviadas ao PostgREST, tornando

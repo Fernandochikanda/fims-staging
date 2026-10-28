@@ -5,6 +5,8 @@ import { Icon } from "../lib/icons";
 import { calcScore, getCategoryHealth } from "../lib/helpers";
 import { getClientTemplate } from "../data/constants";
 import { photoStore } from "../lib/photoStore";
+import { generateMonthlyExcel, generateDailyExcel } from "../lib/excelReport";
+import logoUrl from "../LOGO.png";
 
 export default function ReportCenter({ inspections, locations, users }) {
   const [reportType, setReportType] = useState("daily");
@@ -47,6 +49,27 @@ export default function ReportCenter({ inspections, locations, users }) {
     const section = template.sections?.find(s => s.id === sectionId);
     return section?.title || section?.name || sectionId || "N/A";
   };
+
+  // Logotipo oficial (redimensionado via canvas) para o cabeçalho do Excel
+  const getExcelLogo = () => new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 300;
+        const scale = Math.min(1, maxW / (img.naturalWidth || maxW));
+        const w = Math.max(1, Math.round(img.naturalWidth * scale));
+        const h = Math.max(1, Math.round(img.naturalHeight * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const b64 = canvas.toDataURL("image/jpeg", 0.9).split(",")[1];
+        const width = 132;
+        resolve({ base64: b64, extension: "jpeg", width, height: Math.round(width * h / w) });
+      };
+      img.onerror = () => resolve(null);
+      img.src = logoUrl;
+    } catch (e) { resolve(null); }
+  });
 
   const handleGenerate = async (format) => {
     if (!clientId) {
@@ -96,6 +119,15 @@ export default function ReportCenter({ inspections, locations, users }) {
         await generatePDF(doc, client, inspData, reportType === "daily" ? dailyDate : month, reportType);
         const dateStr = reportType === "daily" ? dailyDate : month;
         doc.save(`Nemchem_${reportType === "daily" ? "Diario" : "Mensal"}_${client.name}_${dateStr}.pdf`);
+      } else if (format === "excel") {
+        setProgress(80);
+        const logo = await getExcelLogo();
+        const dateStr = reportType === "daily" ? dailyDate : month;
+        if (reportType === "daily") {
+          await generateDailyExcel({ client, inspections: inspData, dateStr, logo });
+        } else {
+          await generateMonthlyExcel({ client, inspections: inspData, dateStr, logo });
+        }
       } else {
         await generateWord(client, inspData, reportType === "daily" ? dailyDate : month, reportType);
       }
@@ -777,7 +809,7 @@ export default function ReportCenter({ inspections, locations, users }) {
       <div className="page-header">
         <div>
           <div className="page-title">📄 Centro de Relatórios</div>
-          <div className="page-sub">Gere relatórios profissionais em PDF e Word com fotos e assinaturas</div>
+          <div className="page-sub">Gere relatórios profissionais em PDF, Word e Excel com identidade NemChem</div>
         </div>
       </div>
 
@@ -869,6 +901,15 @@ export default function ReportCenter({ inspections, locations, users }) {
           >
             <Icon name="file" size={14} /> 
             {generating ? "Gerando..." : "Word"}
+          </button>
+          <button 
+            className="btn" 
+            style={{ background: "#0878B9", color: "white" }}
+            onClick={() => handleGenerate("excel")} 
+            disabled={generating || !clientId}
+          >
+            <Icon name="download" size={14} /> 
+            {generating ? "Gerando..." : "Excel (.xlsx)"}
           </button>
         </div>
       </div>
