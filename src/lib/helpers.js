@@ -25,11 +25,11 @@ export function scoreLabel(pct) {
 }
 
 export function getRiskLevel(score) {
-  if (score === 1) return { label: "Critical", color: "#A32D2D" };
-  if (score === 2) return { label: "High Risk", color: "#993C1D" };
-  if (score === 3) return { label: "Medium Risk", color: "#BA7517" };
+  if (score === 1) return { label: "Crítico", color: "#A32D2D" };
+  if (score === 2) return { label: "Risco Alto", color: "#993C1D" };
+  if (score === 3) return { label: "Risco Médio", color: "#BA7517" };
   if (score === 4) return { label: "Acima da Média", color: "#3B6D11" };
-  if (score === 5) return { label: "Excellent", color: "#0F6E56" };
+  if (score === 5) return { label: "Excelente", color: "#0F6E56" };
   return { label: "N/A", color: "#888" };
 }
 
@@ -39,7 +39,7 @@ export function getCategoryHealth(items) {
   const total = answered.reduce((s, i) => s + Number(i.score), 0);
   const avg = total / answered.length;
   const health = Math.round((avg / 5) * 100);
-  const risk = avg <= 2 ? "High Risk" : avg <= 3 ? "Medium Risk" : avg <= 4 ? "Acima da Média" : "Excellent";
+  const risk = avg <= 2 ? "Risco Alto" : avg <= 3 ? "Risco Médio" : avg <= 4 ? "Acima da Média" : "Excelente";
   const color = avg <= 2 ? "#A32D2D" : avg <= 3 ? "#BA7517" : avg <= 4 ? "#3B6D11" : "#0F6E56";
   return { avg: avg.toFixed(1), health, risk, color };
 }

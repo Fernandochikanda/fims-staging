@@ -192,7 +192,10 @@ export function SupervisorDashboard({ inspections, users, currentUser, onView })
   // Usar o hook personalizado (sem avisos hardcoded)
   const { visibleAlerts, handleDismiss } = useSystemAlerts();
 
-  const myInsp = inspections.filter(i => i.type !== "leave");
+  const [period, setPeriod] = useState("month");
+  const periodDays = period === "week" ? 7 : period === "month" ? 30 : period === "quarter" ? 90 : 36500;
+  const cutoff = Date.now() - periodDays * 86400000;
+  const myInsp = inspections.filter(i => i.type !== "leave" && i.date && new Date(i.date).getTime() >= cutoff);
   
   const teamCount = users.filter(u => u.role === ROLES.INSPECTOR).length;
   const pending = myInsp.filter(i => i.status === "pending" || i.status === "in_progress").length;
@@ -214,6 +217,12 @@ export function SupervisorDashboard({ inspections, users, currentUser, onView })
           <div className="page-title">Welcome, {currentUser.name}</div>
           <div className="page-sub">Supervisor Dashboard</div>
         </div>
+        <select value={period} onChange={e => setPeriod(e.target.value)} className="form-select" style={{ width: "auto", fontSize: 12, padding: "4px 8px" }}>
+          <option value="week">Esta semana</option>
+          <option value="month">Este mês</option>
+          <option value="quarter">Este trimestre</option>
+          <option value="year">Este ano</option>
+        </select>
       </div>
       
       {/* Avisos do Sistema - APENAS ANÚNCIOS REAIS */}

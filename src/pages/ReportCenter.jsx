@@ -267,7 +267,7 @@ export default function ReportCenter({ inspections, locations, users }) {
             const severity = item.score === 1 ? "Crítica" : item.score === 2 ? "Alta" : "Média";
             const scoreColor = item.score === 1 ? "#A32D2D" : item.score === 2 ? "#EF9F27" : "#FAC775";
             doc.setTextColor(163, 45, 45);
-            doc.text(`Score: ${item.score}/5  |  Severidade: ${severity}`, 14, y);
+            doc.text(`Pontuação: ${item.score}  |  Severidade: ${severity}`, 14, y);
             y += 5;
             
             doc.setTextColor(50, 50, 50);
@@ -443,7 +443,7 @@ export default function ReportCenter({ inspections, locations, users }) {
       doc.setFontSize(8);
       doc.setTextColor(150, 150, 150);
       doc.setFont("helvetica", "normal");
-      doc.text("NEMCHEM © 2026 - Documento gerado pelo FIMS", 105, 290, { align: "center" });
+      doc.text("NEMCHEM © 2026 - Documento gerado pelo Nemchem", 105, 290, { align: "center" });
       doc.text(`Página ${i} de ${pageCount}`, 196, 290, { align: "right" });
     }
   };
@@ -705,7 +705,7 @@ export default function ReportCenter({ inspections, locations, users }) {
             html += `<div class="finding">
               <h3>${secName}: ${item.label || item.text}</h3>
               <div>
-                <span class="score-badge ${scoreClass}">Score: ${item.score}/5</span>
+                <span class="score-badge ${scoreClass}">Pontuação: ${item.score}</span>
                 <span style="margin-left: 12px; color: #888;">Severidade: ${severity}</span>
               </div>
               <div style="margin-top: 8px;"><strong>Observação:</strong> ${item.comment || "N/A"}</div>
@@ -789,7 +789,7 @@ export default function ReportCenter({ inspections, locations, users }) {
     </div>`;
 
     // FOOTER
-    html += `<div class="footer">NEMCHEM © 2026 - Documento gerado pelo FIMS</div>`;
+    html += `<div class="footer">NEMCHEM © 2026 - Documento gerado pelo Nemchem</div>`;
     html += `</body></html>`;
     
     const blob = new Blob(['\ufeff', html], { type: 'application/msword' });

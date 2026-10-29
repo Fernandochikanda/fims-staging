@@ -74,13 +74,13 @@ export const generateFooter = (doc, isPDF = true, pageCount = 1) => {
       doc.setPage(i);
       doc.setFontSize(8);
       doc.setTextColor(150, 150, 150);
-      doc.text("NEMCHEM © 2024 - Documento gerado pelo FIMS", 105, 290, { align: "center" });
+      doc.text("NEMCHEM © 2026 - Documento gerado pelo Nemchem", 105, 290, { align: "center" });
       doc.text(`Página ${i} de ${pageCount}`, 196, 290, { align: "right" });
     }
   } else {
     return `
       <div style="margin-top: 40px; text-align: center; font-size: 9pt; color: #888; border-top: 1px solid #eee; padding-top: 10px;">
-        NEMCHEM © 2024 - Documento gerado pelo FIMS
+        NEMCHEM © 2026 - Documento gerado pelo Nemchem
       </div>
     `;
   }

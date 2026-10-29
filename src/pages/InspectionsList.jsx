@@ -27,11 +27,11 @@ export default function InspectionsList({
   if (currentUser.role === ROLES.INSPECTOR) {
     // Inspetores só veem as inspeções atribuídas a eles
     accessibleInspections = inspections.filter(i => 
-      String(i.inspector_id) === String(currentUser.id) && i.type !== "leave"
+      String(i.inspector_id) === String(currentUser.id) && i.type !== "leave" && i.status !== "deleted"
     );
   } else {
     // Supervisores, Admins e CEOs veem TODAS as inspeções
-    accessibleInspections = inspections.filter(i => i.type !== "leave");
+    accessibleInspections = inspections.filter(i => i.type !== "leave" && i.status !== "deleted");
   }
   // ============================================================
 

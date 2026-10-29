@@ -16,6 +16,7 @@ import { useComms } from "../context/CommsContext";
 import logoUrl from "../LOGO.png";
 
 const PERIODS = [
+  { id: "week", label: "Esta semana", days: 7 },
   { id: "month", label: "Este mês", days: 30 },
   { id: "quarter", label: "Este trimestre", days: 90 },
   { id: "year", label: "Este ano", days: 365 },
@@ -79,6 +80,13 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
   const [filterClient, setFilterClient] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [compareMode, setCompareMode] = useState(false);
+  const [selectedMonth, setSelectedMonth] = useState("");
+  const MONTHS = useMemo(() => {
+    const arr = [];
+    const t = new Date();
+    for (let i = 0; i < 12; i++) { const d = new Date(t.getFullYear(), t.getMonth() - i, 1); arr.push({ key: d.toISOString().substring(0, 7), label: d.toLocaleDateString("pt-PT", { month: "long", year: "numeric" }) }); }
+    return arr;
+  }, []);
 
   // Defeitos agora vêm do Supabase (async) — carregados em estado + refrescados periodicamente
   const [openDefects, setOpenDefects] = useState([]);
@@ -104,7 +112,10 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
   const cutoff = useMemo(() => Date.now() - periodDays * 86400000, [periodDays]);
   const prevCutoff = useMemo(() => Date.now() - 2 * periodDays * 86400000, [periodDays]);
 
-  const filtered = useMemo(() => inspections.filter(i => inRange(i, cutoff, Date.now() + 1)), [inspections, cutoff]);
+  const filtered = useMemo(() => {
+    if (selectedMonth) return inspections.filter(i => i.type !== "leave" && i.date && i.date.startsWith(selectedMonth));
+    return inspections.filter(i => inRange(i, cutoff, Date.now() + 1));
+  }, [inspections, cutoff, selectedMonth]);
   const prevFiltered = useMemo(() => inspections.filter(i => inRange(i, prevCutoff, cutoff)), [inspections, prevCutoff, cutoff]);
 
   const total = filtered.length;
@@ -368,7 +379,7 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
     if (churnRisk.length === 0) { doc.text("Nenhum", 14, y); y += 6; }
     churnRisk.forEach((c) => { if (y > 280) { doc.addPage(); y = 20; } doc.text("- " + c.name + " (avg " + (c.avg !== null ? c.avg + "%" : "N/A") + ", " + c.open + " abertos)", 14, y); y += 6; });
     const pageCount = doc.internal.getNumberOfPages();
-    for (let i = 1; i <= pageCount; i++) { doc.setPage(i); doc.setFontSize(8); doc.setTextColor(150, 150, 150); doc.text("NEMCHEM (c) 2024 - Documento gerado pelo FIMS", 105, 290, { align: "center" }); }
+    for (let i = 1; i <= pageCount; i++) { doc.setPage(i); doc.setFontSize(8); doc.setTextColor(150, 150, 150); doc.text("NEMCHEM © 2026 - Documento gerado pelo Nemchem", 105, 290, { align: "center" }); }
     doc.save("FIMS-Executive-Summary.pdf");
   };
 
@@ -406,6 +417,10 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
             <div style={{ fontSize: 10, opacity: 0.85 }}>Período de Inspeção</div>
             <select value={period} onChange={e => setPeriod(e.target.value)} style={{ marginTop: 2, padding: "4px 8px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)", background: "rgba(255,255,255,0.12)", color: "white", fontWeight: 600 }}>
               {PERIODS.map(p => <option key={p.id} value={p.id} style={{ color: "#1E2A3A" }}>{p.label}</option>)}
+            </select>
+            <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} style={{ marginTop: 2, padding: "4px 8px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)", background: "rgba(255,255,255,0.12)", color: "white", fontWeight: 600 }}>
+              <option value="" style={{ color: "#1E2A3A" }}>Todos os meses</option>
+              {MONTHS.map(m => <option key={m.key} value={m.key} style={{ color: "#1E2A3A" }}>{m.label}</option>)}
             </select>
           </div>
           <button className="btn btn-sm" onClick={() => setShowAnnModal(true)} title="Comunicar anúncio" style={{ background: "rgba(255,255,255,0.15)", color: "white", border: "1px solid rgba(255,255,255,0.4)" }}>
