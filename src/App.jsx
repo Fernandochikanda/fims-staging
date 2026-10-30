@@ -20,7 +20,7 @@ import Notifications from "./pages/Notifications";
 import ScheduleModal from "./components/ScheduleModal";
 import RescheduleModal from "./components/RescheduleModal";
 import BulkScheduleModal from "./components/BulkScheduleModal";
-import { UsersPage, LocationsPage, ReportsPage, TemplatesPage, AuditPage, SettingsPage } from "./pages/Management";
+import { UsersPage, LocationsPage, ReportsPage, TemplatesPage, AuditPage, ActivityReport, SettingsPage } from "./pages/Management";
 import { SEED_USERS, SEED_LOCATIONS, ROLES } from "./data/constants";
 import { genSeedInspections, genId } from "./lib/helpers";
 import { exportToICS } from "./lib/icsExporter";
@@ -891,6 +891,8 @@ function AppContent() {
             <LocationsPage locations={locations} setLocations={setLocations} users={users} inspections={inspections} />
           ) : page === "templates" ? (
             <TemplatesPage />
+          ) : page === "activity_report" ? (
+            <ActivityReport auditLogs={auditLogs} users={users} />
           ) : page === "audit" ? (
             <AuditPage auditLogs={auditLogs} users={users} />
           ) : page === "notifications" ? (

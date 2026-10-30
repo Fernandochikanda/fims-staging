@@ -1289,3 +1289,105 @@ export function SettingsPage({ inspections, setInspections }) {
     </div>
   );
 }
+
+
+export function ActivityReport({ auditLogs, users }) {
+  const [timings, setTimings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filterUser, setFilterUser] = useState('all');
+  const [filterType, setFilterType] = useState('all');
+
+  useEffect(() => {
+    const fetchTimings = async () => {
+      try {
+        const { supabase } = await import('../lib/supabase');
+        const { data } = await supabase.from('fims_inspection_timings').select('*').order('created_at', { ascending: false }).limit(50);
+        setTimings(data || []);
+      } catch (e) { console.warn('Failed to fetch timings:', e); }
+      setLoading(false);
+    };
+    fetchTimings();
+  }, []);
+
+  const completedTimings = timings.filter(t => t.duration_minutes > 0);
+  const avgDuration = completedTimings.length ? Math.round(completedTimings.reduce((s, t) => s + t.duration_minutes, 0) / completedTimings.length) : 0;
+
+  let filteredTimings = timings;
+  if (filterUser !== 'all') filteredTimings = filteredTimings.filter(t => String(t.inspector_id) === filterUser);
+  let filteredLogs = auditLogs;
+  if (filterType !== 'all') filteredLogs = filteredLogs.filter(l => l.type === filterType);
+  if (filterUser !== 'all') { const u = users.find(x => String(x.id) === filterUser); if (u) filteredLogs = filteredLogs.filter(l => l.user === u.name); }
+
+  const fmtDur = (min) => { if (!min || min <= 0) return '—'; if (min < 60) return min + ' min'; return Math.floor(min / 60) + 'h ' + (min % 60) + 'min'; };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">Relatório de Atividade</div>
+          <div className="page-sub">Tempos de inspeção + registos de auditoria</div>
+        </div>
+      </div>
+      <div className="metric-grid">
+        <div className="metric-card"><div className="metric-label">Inspeções Cronometradas</div><div className="metric-value">{completedTimings.length}</div></div>
+        <div className="metric-card"><div className="metric-label">Duração Média</div><div className="metric-value" style={{ color: '#0F6E56' }}>{fmtDur(avgDuration)}</div></div>
+        <div className="metric-card"><div className="metric-label">Ações Registadas</div><div className="metric-value">{auditLogs.length}</div></div>
+      </div>
+      <div className="card" style={{ marginBottom: 16, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select value={filterUser} onChange={e => setFilterUser(e.target.value)} className="form-select" style={{ width: 'auto' }}>
+          <option value="all">Todos os Utilizadores</option>
+          {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+        </select>
+        <select value={filterType} onChange={e => setFilterType(e.target.value)} className="form-select" style={{ width: 'auto' }}>
+          <option value="all">Todos os Tipos</option>
+          <option value="inspection">Inspeção</option>
+          <option value="review">Revisão</option>
+          <option value="report">Relatório</option>
+          <option value="login">Login</option>
+          <option value="notification">Notificação</option>
+        </select>
+      </div>
+      <div className="card" style={{ marginBottom: 16, padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: 12, borderBottom: '1px solid #eee' }}><h3 style={{ fontSize: 14, margin: 0, color: '#1E2A3A' }}>Tempo de Inspeção</h3></div>
+        <div style={{ maxHeight: 300, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead style={{ position: 'sticky', top: 0, background: '#F8F7F4' }}><tr>{['Inspetor', 'Local', 'Início', 'Fim', 'Duração', 'Pausas'].map(h => <th key={h} style={{ textAlign: 'left', padding: '8px 6px', borderBottom: '1px solid #eee', color: '#6B7280', fontWeight: 600, fontSize: 11 }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {filteredTimings.length === 0 && <tr><td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#888' }}>Sem dados de tempo.</td></tr>}
+              {filteredTimings.map(t => (
+                <tr key={t.id} style={{ borderBottom: '1px solid #f3f3f3' }}>
+                  <td style={{ padding: '6px' }}>{t.inspector_name || '—'}</td>
+                  <td style={{ padding: '6px' }}>{t.location_name || '—'}</td>
+                  <td style={{ padding: '6px', color: '#6B7280', fontSize: 11 }}>{t.start_time ? new Date(t.start_time).toLocaleString('pt-PT') : '—'}</td>
+                  <td style={{ padding: '6px', color: '#6B7280', fontSize: 11 }}>{t.end_time ? new Date(t.end_time).toLocaleString('pt-PT') : '—'}</td>
+                  <td style={{ padding: '6px', fontWeight: 600, color: t.duration_minutes > 60 ? '#A32D2D' : '#0F6E56' }}>{fmtDur(t.duration_minutes)}</td>
+                  <td style={{ padding: '6px', color: '#9CA3AF' }}>{(t.pause_history || []).filter(p => p.event === 'pause').length}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: 12, borderBottom: '1px solid #eee' }}><h3 style={{ fontSize: 14, margin: 0, color: '#1E2A3A' }}>Registos de Auditoria</h3></div>
+        <div style={{ maxHeight: 300, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead style={{ position: 'sticky', top: 0, background: '#F8F7F4' }}><tr>{['Utilizador', 'Ação', 'Tipo', 'Detalhe', 'Data'].map(h => <th key={h} style={{ textAlign: 'left', padding: '8px 6px', borderBottom: '1px solid #eee', color: '#6B7280', fontWeight: 600, fontSize: 11 }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {filteredLogs.length === 0 && <tr><td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#888' }}>Sem registos.</td></tr>}
+              {filteredLogs.slice(0, 50).map(log => (
+                <tr key={log.id || log.timestamp} style={{ borderBottom: '1px solid #f3f3f3' }}>
+                  <td style={{ padding: '6px', fontWeight: 500 }}>{log.user || '—'}</td>
+                  <td style={{ padding: '6px' }}>{log.action || '—'}</td>
+                  <td style={{ padding: '6px' }}><span className="badge" style={{ background: '#378ADD', color: 'white', fontSize: 10 }}>{log.type}</span></td>
+                  <td style={{ padding: '6px', color: '#6B7280', fontSize: 11 }}>{log.detail || ''}</td>
+                  <td style={{ padding: '6px', color: '#9CA3AF', fontSize: 11 }}>{log.timestamp ? new Date(log.timestamp).toLocaleString('pt-PT') : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}

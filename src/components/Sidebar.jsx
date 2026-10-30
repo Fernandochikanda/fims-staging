@@ -15,6 +15,7 @@ export default function Sidebar({ currentUser, activePage, onNavigate, alertCoun
     { id: "messages", icon: "mail", label: "Mensagens", roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR, ROLES.INSPECTOR] },
     { id: "field_map", icon: "location", label: "Mapa de Campo", roles: [ROLES.ADMIN, ROLES.SUPERVISOR] },
     { id: "team", icon: "users", label: "Equipa (KPIs)", roles: [ROLES.ADMIN, ROLES.SUPERVISOR] },
+    { id: "activity_report", icon: "audit", label: "Atividade", roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR] },
     { id: "alerts", icon: "alert", label: t.alerts, badge: alertCount || null, roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR] },
     { id: "defects", icon: "alert", label: "Defeitos", roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR] },
     { id: "users", icon: "users", label: t.users, roles: [ROLES.ADMIN] },
