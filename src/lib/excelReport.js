@@ -649,7 +649,7 @@ export async function buildDailyWorkbook({ client, inspections, dateStr, logo, n
     const findRows = findings.map(f => ([
       { v: nameOfSection(f.insp, f.item.section_id) },
       { v: f.item.label || f.item.text || "Item", align: "left" },
-      { v: `${f.item.score}/5`, color: sevColor[Number(f.item.score)] || NEM.text, bold: true },
+      { v: `${f.item.score}`, color: sevColor[Number(f.item.score)] || NEM.text, bold: true },
       { v: sevLabel(Number(f.item.score)), color: sevColor[Number(f.item.score)] || NEM.text },
       { v: (f.item.comment || "—"), wrap: true, align: "left" }, { }, { }, { }, { }, { },
     ]));

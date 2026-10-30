@@ -247,7 +247,7 @@ export const generateDailyPDF = async (doc, client, inspData, dateStr) => {
         doc.text(`${secName}: ${item.label || item.text}`, 14, y);
         y += 5;
         doc.setFont("helvetica", "normal");
-        doc.text(`Score: ${item.score}/5`, 14, y);
+        doc.text(`Pontuação: ${item.score}`, 14, y);
         const severity = item.score === 1 ? "Crítica" : item.score === 2 ? "Alta" : "Média";
         doc.text(`Severidade: ${severity}`, 60, y);
         y += 5;
@@ -635,7 +635,7 @@ export const generateWordHTML = async (client, inspData, dateStr, type) => {
           html += `<div class="finding">
             <h3>${secName}: ${item.label || item.text}</h3>
             <div>
-              <span class="score-badge ${scoreClass}">Score: ${item.score}/5</span>
+              <span class="score-badge ${scoreClass}">Pontuação: ${item.score}</span>
               <span style="margin-left: 10px;">Severidade: ${severity}</span>
             </div>
             <div style="margin-top: 8px;"><strong>Observação:</strong> ${item.comment || "N/A"}</div>
