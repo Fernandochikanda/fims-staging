@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { jsPDF } from "jspdf";
 import * as XLSX from 'xlsx';
 import logoUrl from '../LOGO.png';
+import { generateDailyExcel } from "../lib/excelReport";
 import { Icon } from "../lib/icons";
 import ScoreRing from "../components/ScoreRing";
 import StatusBadge from "../components/StatusBadge";
@@ -197,36 +198,33 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
     setQcItem(null);
   };
   // Funções de exportação (PDF E WORD COM FOTOS)
-  const handleDownloadExcel = () => {
+  const handleDownloadExcel = async () => {
     try {
-      const secScores = (TEMPLATE_SECTIONS || []).map(s => {
-        const sItems = (inspection.items || []).filter(i => i.section_id === s.id && i.score !== null);
-        const avg = sItems.length ? Math.round((sItems.reduce((sum, i) => sum + Number(i.score), 0) / (sItems.length * 5)) * 100) : null;
-        const health = getCategoryHealth(sItems);
-        return { "Secção": s.name || s.title || "Seção", "Score %": avg !== null ? avg : "N/A", "Risco": health.risk };
+      const logo = await new Promise((resolve) => {
+        try {
+          const img = new Image();
+          img.onload = () => {
+            const maxW = 300;
+            const scale = Math.min(1, maxW / (img.naturalWidth || maxW));
+            const w = Math.max(1, Math.round(img.naturalWidth * scale));
+            const h = Math.max(1, Math.round(img.naturalHeight * scale));
+            const canvas = document.createElement("canvas");
+            canvas.width = w; canvas.height = h;
+            canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+            const b64 = canvas.toDataURL("image/jpeg", 0.9).split(",")[1];
+            const width = 132;
+            resolve({ base64: b64, extension: "jpeg", width, height: Math.round(width * h / w) });
+          };
+          img.onerror = () => resolve(null);
+          img.src = logoUrl;
+        } catch (e) { resolve(null); }
       });
-      const resumo = [
-        { Campo: "Cliente", Valor: inspection.location_name || "N/A" },
-        { Campo: "Data", Valor: inspection.date || "N/A" },
-        { Campo: "Inspetor", Valor: inspection.inspector_name || "N/A" },
-        { Campo: "Pontuação Total", Valor: (inspection.score_pct || 0) + "%" },
-        { Campo: "Tipo", Valor: "Interno" },
-      ];
-      const itens = (inspection.items || []).map(i => {
-        const sec = (inspection.sections || []).find(s => String(s.id) === String(i.section_id));
-        return {
-          "Secção": sec ? (sec.title || sec.name || "") : "",
-          "Item": i.label || i.text || "",
-          "Score": i.score !== null ? i.score : "",
-          "Comentário": i.comment || "",
-          "Comentário QC": i.qc_comment || "",
-        };
+      await generateDailyExcel({
+        client: { name: inspection.location_name },
+        inspections: [inspection],
+        dateStr: inspection.date,
+        logo
       });
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumo), "Resumo");
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(secScores), "Categorias");
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itens), "Itens");
-      XLSX.writeFile(wb, "Relatorio-Interno-" + (inspection.location_name || "Inspecao") + ".xlsx");
     } catch (error) {
       console.error("Erro ao gerar Excel:", error);
       alert("Erro ao gerar Excel: " + (error && error.message ? error.message : "tente novamente"));
