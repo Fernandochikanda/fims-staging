@@ -3,6 +3,8 @@ import { useState, useEffect } from "react";
 import { jsPDF } from "jspdf";
 import * as XLSX from 'xlsx';
 import logoUrl from '../LOGO.png';
+import { timingService } from "../services/timingService";
+import { logService } from "../services/logService";
 import { generateDailyExcel } from "../lib/excelReport";
 import timingService from "../services/timingService";
 import { Icon } from "../lib/icons";
@@ -203,6 +205,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
   // Funções de exportação (PDF E WORD COM FOTOS)
   const handleDownloadExcel = async () => {
     try {
+      logService.log(currentUser, "Descarregou Excel", "report", inspection.location_name || "");
       const logo = await new Promise((resolve) => {
         try {
           const img = new Image();
@@ -236,6 +239,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
 
   const handleDelete = () => {
     if (!window.confirm("Tem a certeza que pretende eliminar esta inspeção? Esta ação não pode ser desfeita.")) return;
+    logService.log(currentUser, "Eliminou inspeção", "inspection", inspection.location_name || "");
     onUpdate({ ...inspection, status: "deleted" });
     onBack();
   };
@@ -292,6 +296,12 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
       doc.text(`Inspetor: ${inspection.inspector_name || "N/A"}`, 18, 55);
       doc.text(`Pontuação Total: ${inspection.score_pct || 0}%`, 120, 43);
       doc.text(`Tipo: ${typeLabel}`, 120, 49);
+      if (reportType === "internal") {
+        const _timing = await timingService.getTiming(inspection.id);
+        if (_timing && _timing.duration_minutes > 0) {
+          doc.text(`Duração: ${timingService.formatDuration(_timing.duration_minutes)}`, 120, 55);
+        }
+      }
       if (reportType === "internal" && timing && timing.duration_minutes > 0) { doc.setFontSize(9); doc.setTextColor(100, 100, 100); doc.text(`Duracao: ${timingService.formatDuration(timing.duration_minutes)}`, 120, 55); }
       let y = 72;
 
@@ -468,6 +478,9 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
   const handleDownloadWord = (reportType = "internal", lang = "pt") => {
     try {
       const S = lang === "en" ? STR_EN : STR_PT;
+      logService.log(currentUser, "Descarregou Word (" + reportType + ")", "report", inspection.location_name || "");
+      const _wtiming = reportType === "internal" ? await timingService.getTiming(inspection.id) : null;
+      const _wdur = _wtiming && _wtiming.duration_minutes > 0 ? timingService.formatDuration(_wtiming.duration_minutes) : null;
       let html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>Export</title>
       <style>
         body { font-family: Arial, sans-serif; font-size: 11pt; color: #333; }

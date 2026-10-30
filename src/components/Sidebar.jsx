@@ -20,7 +20,7 @@ export default function Sidebar({ currentUser, activePage, onNavigate, alertCoun
     { id: "users", icon: "users", label: t.users, roles: [ROLES.ADMIN] },
     { id: "locations", icon: "location", label: t.locations, roles: [ROLES.ADMIN, ROLES.SUPERVISOR] },
     { id: "templates", icon: "template", label: t.templates, roles: [ROLES.ADMIN] },
-    { id: "audit", icon: "audit", label: t.audit, roles: [ROLES.ADMIN] },
+    { id: "audit", icon: "audit", label: t.audit, roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR] },
     { id: "settings", icon: "settings", label: t.settings, roles: [ROLES.ADMIN] },
   ].filter(item => item.roles.includes(role));
 

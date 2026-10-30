@@ -28,6 +28,13 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   const [showRefModal, setShowRefModal] = useState(null);
   const [refPhotos, setRefPhotos] = useState([]);
 
+  // Hidden timing: start when form opens (inspector unaware)
+  useEffect(() => {
+    if (inspection?.id) {
+      timingService.start(inspection);
+    }
+  }, [inspection?.id]);
+
   // Carregar template - VERSÃO MELHORADA COM SUPABASE
   useEffect(() => {
     async function loadTemplate() {
