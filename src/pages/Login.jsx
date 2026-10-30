@@ -9,6 +9,7 @@ export default function Login({ onLogin }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleLogin = async () => {
     setError("");
@@ -73,13 +74,17 @@ export default function Login({ onLogin }) {
           <label className="form-label">Senha</label>
           <input 
             className="form-input" 
-            type="password" 
+            type={showPassword ? "text" : "password"} 
             value={password} 
             onChange={e => setPassword(e.target.value)} 
             placeholder="••••••••" 
             onKeyDown={handleKeyPress}
             disabled={loading}
           />
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#6B7280", marginTop: 6, cursor: "pointer" }}>
+            <input type="checkbox" checked={showPassword} onChange={e => setShowPassword(e.target.checked)} style={{ cursor: "pointer" }} />
+            Mostrar senha
+          </label>
         </div>
 
         <button 
