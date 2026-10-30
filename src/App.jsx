@@ -371,6 +371,21 @@ function AppContent() {
   useEffect(() => { if (isInitialized) dataStore.set(STORAGE_KEYS.USERS, users); }, [users, isInitialized]);
   useEffect(() => { if (isInitialized) dataStore.set(STORAGE_KEYS.LOCATIONS, locations); }, [locations, isInitialized]);
   useEffect(() => { if (isInitialized) dataStore.set(STORAGE_KEYS.LOGS, auditLogs); }, [auditLogs, isInitialized]);
+  useEffect(() => {
+    if (!currentUser) return;
+    const runChecks = async () => {
+      try {
+        const { reminderService } = await import('./services/reminderService');
+        const { escalationService } = await import('./services/escalationService');
+        await reminderService.checkAndRemind(inspections, users, currentUser);
+        await reminderService.checkDailySummary(inspections, currentUser);
+        await escalationService.checkAndEscalate();
+      } catch (e) { console.warn('[checks]', e); }
+    };
+    runChecks();
+    const interval = setInterval(runChecks, 300000);
+    return () => clearInterval(interval);
+  }, [currentUser, inspections]);
 
   // --- SALVAR DADOS LEVES NO localStorage ---
   useEffect(() => { if (currentUser && page) localStorage.setItem(STORAGE_KEYS.CURRENT_PAGE, page); }, [page, currentUser]);

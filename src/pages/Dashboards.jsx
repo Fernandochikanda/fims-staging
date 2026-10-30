@@ -224,6 +224,7 @@ export function SupervisorDashboard({ inspections, users, currentUser, onView })
           <option value="year">Este ano</option>
         </select>
       </div>
+      {(() => { const pending = inspections.filter(i => i.status === 'submitted' && i.type !== 'leave'); if (pending.length === 0) return null; return (<div className="card" style={{ marginBottom: 16, padding: 14, borderLeft: "4px solid #F4A51C", background: "#FFF7ED" }}><div style={{ fontSize: 14, fontWeight: 600, color: "#BA7517" }}>{pending.length} inspecao(oes) aguardando revisao</div></div>); })()}
       
       {/* Avisos do Sistema - APENAS ANÚNCIOS REAIS */}
       {visibleAlerts.length > 0 && (
@@ -350,6 +351,14 @@ export function InspectorDashboard({ inspections, users, currentUser, onStartIns
 
   return (
     <div>
+      {(() => {
+        const today = new Date().toISOString().split('T')[0];
+        const myI = inspections.filter(i => String(i.inspector_id) === String(currentUser.id) && i.type !== 'leave');
+        const dueToday = myI.filter(i => i.date === today && !['submitted','reviewed','closed','deleted'].includes(i.status));
+        const overdue = myI.filter(i => { if (['submitted','reviewed','closed','deleted'].includes(i.status) || !i.date) return false; return new Date(i.date).getTime() < Date.now() - 48*3600000; });
+        if (dueToday.length === 0 && overdue.length === 0) return null;
+        return (<div className="card" style={{ marginBottom: 16, padding: 14, borderLeft: "4px solid #A32D2D", background: "#FEF2F2" }}>{dueToday.length > 0 && <div style={{ fontSize: 14, fontWeight: 600, color: "#A32D2D", marginBottom: 4 }}>{dueToday.length} inspecao(oes) marcadas para hoje</div>}{overdue.length > 0 && <div style={{ fontSize: 14, fontWeight: 600, color: "#A32D2D" }}>{overdue.length} inspecao(oes) em atraso (> 48h)</div>}</div>);
+      })()}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px", flexWrap: "wrap", gap: 12 }} className="no-print">
         <div>
           <div style={{ fontSize: "22px", fontWeight: 600 }}>{t.welcome}, {currentUser.name}</div>
