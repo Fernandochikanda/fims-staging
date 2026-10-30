@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { Icon } from "../lib/icons";
 import { optimizeImage } from "../lib/imageOptimizer";
+import PhotoAnnotator from "./PhotoAnnotator";
 
 export default function PhotoUploader({ id, photos, onAdd, onRemove, max = 3, isRequired, label }) {
   const fileInputRef = useRef(null);
@@ -8,6 +9,7 @@ export default function PhotoUploader({ id, photos, onAdd, onRemove, max = 3, is
   const [uploading, setUploading] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const [pendingImage, setPendingImage] = useState(null);
 
   const handleFiles = async (files) => {
     setUploading(true);
@@ -15,7 +17,7 @@ export default function PhotoUploader({ id, photos, onAdd, onRemove, max = 3, is
     for (let file of arr) {
       if (photos.length >= max) break;
       const optimized = await optimizeImage(file);
-      await onAdd(id, optimized);
+      setPendingImage(optimized);
     }
     setUploading(false);
   };
@@ -54,6 +56,20 @@ export default function PhotoUploader({ id, photos, onAdd, onRemove, max = 3, is
         <div className="photo-lightbox-overlay" onClick={() => setLightboxUrl(null)}>
           <img src={lightboxUrl} alt="Evidência" />
         </div>
+      )}
+      {pendingImage && (
+        <PhotoAnnotator
+          imageUrl={pendingImage.url || pendingImage}
+          onSave={(annotatedUrl) => {
+            const orig = pendingImage.url || pendingImage;
+            onAdd(id, { ...pendingImage, url: annotatedUrl, originalUrl: orig, annotated: true });
+            setPendingImage(null);
+          }}
+          onSkip={() => {
+            onAdd(id, pendingImage);
+            setPendingImage(null);
+          }}
+        />
       )}
     </div>
   );
