@@ -4,6 +4,7 @@ import { jsPDF } from "jspdf";
 import * as XLSX from 'xlsx';
 import logoUrl from '../LOGO.png';
 import { generateDailyExcel } from "../lib/excelReport";
+import timingService from "../services/timingService";
 import { Icon } from "../lib/icons";
 import ScoreRing from "../components/ScoreRing";
 import StatusBadge from "../components/StatusBadge";
@@ -25,6 +26,8 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
   const [qcItem, setQcItem] = useState(null);
   const [qcText, setQcText] = useState("");
   const [loading, setLoading] = useState(true);
+  const [timing, setTiming] = useState(null);
+  useEffect(() => { timingService.getTiming(inspection.id).then(setTiming); }, [inspection.id]);
   const [reportLang, setReportLang] = useState("pt");
   const { notify, notifyEvent } = useComms();
   // Verificar se o usuário pode revisar (ADMIN ou SUPERVISOR)
@@ -289,6 +292,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
       doc.text(`Inspetor: ${inspection.inspector_name || "N/A"}`, 18, 55);
       doc.text(`Pontuação Total: ${inspection.score_pct || 0}%`, 120, 43);
       doc.text(`Tipo: ${typeLabel}`, 120, 49);
+      if (reportType === "internal" && timing && timing.duration_minutes > 0) { doc.setFontSize(9); doc.setTextColor(100, 100, 100); doc.text(`Duracao: ${timingService.formatDuration(timing.duration_minutes)}`, 120, 55); }
       let y = 72;
 
       if (sectionScores.length > 0) {
@@ -488,6 +492,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
         <div><strong>Data:</strong> ${new Date(inspection.date).toLocaleDateString("pt-PT")}</div>
         <div><strong>Inspetor:</strong> ${inspection.inspector_name || "N/A"}</div>
         <div><strong>Pontuação Total:</strong> ${inspection.score_pct || 0}%</div>
+        ${reportType === "internal" && timing && timing.duration_minutes > 0 ? `<div><strong>Duracao:</strong> ${timingService.formatDuration(timing.duration_minutes)}</div>` : ""}
       </div>`;
 
       if (sectionScores.length > 0) {

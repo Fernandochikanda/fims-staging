@@ -221,6 +221,8 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   const totalItems = items.length;
 
   const handleSave = () => {
+    timingService.pause(inspection.id);
+    logService.log({ id: inspection.inspector_id, name: inspection.inspector_name }, "Guardou rascunho", "inspection", inspection.location_name);
     onSave({ 
       ...inspection, 
       items, 
@@ -238,6 +240,8 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   };
 
   const handleSubmit = () => {
+    timingService.stop(inspection.id);
+    logService.log({ id: inspection.inspector_id, name: inspection.inspector_name }, "Submeteu inspeção", "inspection", inspection.location_name);
     const errors = [];
     
     sections.forEach(section => {
