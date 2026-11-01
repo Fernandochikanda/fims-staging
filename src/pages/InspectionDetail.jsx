@@ -1,13 +1,12 @@
 // /src/pages/InspectionDetail.jsx
 import { useState, useEffect } from "react";
 import { jsPDF } from "jspdf";
-import * as XLSX from 'xlsx';
 import logoUrl from '../LOGO.png';
 import { timingService } from "../services/timingService";
 import { logService } from "../services/logService";
-import { generateDailyExcel } from "../lib/excelReport";
 import timingService from "../services/timingService";
 import { Icon } from "../lib/icons";
+import { generateInspectionExcel, fetchExcelLogo } from "../lib/excelReport";
 import ScoreRing from "../components/ScoreRing";
 import StatusBadge from "../components/StatusBadge";
 import { photoStore } from "../lib/photoStore";
@@ -203,37 +202,24 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
     setQcItem(null);
   };
   // Funções de exportação (PDF E WORD COM FOTOS)
+  // Excel (Interno) — MESMO PADRÃO VISUAL do Centro de Relatórios
+  // (src/lib/excelReport.js): banner corporativo, cartões KPI, tabelas com
+  // barras e folhas de detalhe filtrável. Dados: apenas os da própria inspecção.
+  const [excelBusy, setExcelBusy] = useState(false);
   const handleDownloadExcel = async () => {
+    if (excelBusy) return;
+    setExcelBusy(true);
     try {
       logService.log(currentUser, "Descarregou Excel", "report", inspection.location_name || "");
-      const logo = await new Promise((resolve) => {
-        try {
-          const img = new Image();
-          img.onload = () => {
-            const maxW = 300;
-            const scale = Math.min(1, maxW / (img.naturalWidth || maxW));
-            const w = Math.max(1, Math.round(img.naturalWidth * scale));
-            const h = Math.max(1, Math.round(img.naturalHeight * scale));
-            const canvas = document.createElement("canvas");
-            canvas.width = w; canvas.height = h;
-            canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-            const b64 = canvas.toDataURL("image/jpeg", 0.9).split(",")[1];
-            const width = 132;
-            resolve({ base64: b64, extension: "jpeg", width, height: Math.round(width * h / w) });
-          };
-          img.onerror = () => resolve(null);
-          img.src = logoUrl;
-        } catch (e) { resolve(null); }
-      });
-      await generateDailyExcel({
-        client: { name: inspection.location_name },
-        inspections: [inspection],
-        dateStr: inspection.date,
-        logo
-      });
+      const logo = await fetchExcelLogo(logoUrl);
+      // TEMPLATE_SECTIONS: secções resolvidas da própria inspecção (com
+      // fallback quando inspection.sections está vazio) — garante nomes correctos
+      await generateInspectionExcel({ inspection: { ...inspection, sections: TEMPLATE_SECTIONS }, logo });
     } catch (error) {
       console.error("Erro ao gerar Excel:", error);
       alert("Erro ao gerar Excel: " + (error && error.message ? error.message : "tente novamente"));
+    } finally {
+      setExcelBusy(false);
     }
   };
 
@@ -650,8 +636,8 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
       {canReview && (
         <div className="card" style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           <div style={{ fontSize: 14, fontWeight: 500 }}>📊 Exportar Excel (Interno)</div>
-          <button className="btn btn-success btn-sm" onClick={handleDownloadExcel}>
-            <Icon name="download" size={13} /> Excel (.xlsx)
+          <button className="btn btn-success btn-sm" onClick={handleDownloadExcel} disabled={excelBusy}>
+            <Icon name="download" size={13} /> {excelBusy ? "Gerando..." : "Excel (.xlsx)"}
           </button>
         </div>
       )}

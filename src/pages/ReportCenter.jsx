@@ -5,7 +5,7 @@ import { Icon } from "../lib/icons";
 import { calcScore, getCategoryHealth } from "../lib/helpers";
 import { getClientTemplate } from "../data/constants";
 import { photoStore } from "../lib/photoStore";
-import { generateMonthlyExcel, generateDailyExcel } from "../lib/excelReport";
+import { generateMonthlyExcel, generateDailyExcel, fetchExcelLogo } from "../lib/excelReport";
 import logoUrl from "../LOGO.png";
 
 export default function ReportCenter({ inspections, locations, users }) {
@@ -50,26 +50,9 @@ export default function ReportCenter({ inspections, locations, users }) {
     return section?.title || section?.name || sectionId || "N/A";
   };
 
-  // Logotipo oficial (redimensionado via canvas) para o cabeçalho do Excel
-  const getExcelLogo = () => new Promise((resolve) => {
-    try {
-      const img = new Image();
-      img.onload = () => {
-        const maxW = 300;
-        const scale = Math.min(1, maxW / (img.naturalWidth || maxW));
-        const w = Math.max(1, Math.round(img.naturalWidth * scale));
-        const h = Math.max(1, Math.round(img.naturalHeight * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = w; canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        const b64 = canvas.toDataURL("image/jpeg", 0.9).split(",")[1];
-        const width = 132;
-        resolve({ base64: b64, extension: "jpeg", width, height: Math.round(width * h / w) });
-      };
-      img.onerror = () => resolve(null);
-      img.src = logoUrl;
-    } catch (e) { resolve(null); }
-  });
+  // Logotipo oficial do Excel — helper partilhado em src/lib/excelReport.js
+  // (mesmo padrão usado pelo "Excel (Interno)" da página de inspecção)
+  const getExcelLogo = () => fetchExcelLogo(logoUrl);
 
   const handleGenerate = async (format) => {
     if (!clientId) {

@@ -100,12 +100,39 @@ export const STATE_LABELS = {
   in_progress: "Em curso",
   submitted: "Submetida",
   reviewed: "Revista",
+  needs_corrections: "Necessita correcções",
 };
 
 function stateColor(status) {
   if (status === "submitted" || status === "reviewed") return NEM.green;
-  if (status === "in_progress" || status === "pending_acceptance") return NEM.orange;
+  if (status === "in_progress" || status === "pending_acceptance" || status === "needs_corrections") return NEM.orange;
   return NEM.grey;
+}
+
+/**
+ * Logotipo oficial para o cabeçalho do Excel, redimensionado via canvas
+ * (JPEG base64, largura final 132 px) — partilhado por TODOS os exports.
+ */
+export function fetchExcelLogo(logoSrc) {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 300;
+        const scale = Math.min(1, maxW / (img.naturalWidth || maxW));
+        const w = Math.max(1, Math.round(img.naturalWidth * scale));
+        const h = Math.max(1, Math.round(img.naturalHeight * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const b64 = canvas.toDataURL("image/jpeg", 0.9).split(",")[1];
+        const width = 132;
+        resolve({ base64: b64, extension: "jpeg", width, height: Math.round(width * h / w) });
+      };
+      img.onerror = () => resolve(null);
+      img.src = logoSrc;
+    } catch (e) { resolve(null); }
+  });
 }
 
 /** Nome da área/section: inspection.sections (fonte autoritativa da própria
@@ -692,6 +719,154 @@ export async function buildDailyWorkbook({ client, inspections, dateStr, logo, n
 }
 
 // ---------------------------------------------------------------------------
+// RELATÓRIO DE INSPECÇÃO INDIVIDUAL (Interno) — mesmo padrão visual do
+// Centro de Relatórios: banner, cartões KPI, tabelas com barras e resumo.
+// 2 folhas: "Resumo da Inspecção" + "Itens Avaliados" (detalhe filtrável).
+// ---------------------------------------------------------------------------
+export async function buildInspectionWorkbook({ inspection, logo, now = new Date() }) {
+  const ExcelJS = await ensureExcelJS();
+  const nameOfSection = (insp, sid) => resolveSectionName(insp, sid);
+  const st = buildStats([inspection], nameOfSection);
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "FIMS — NemChem";
+  wb.created = now;
+
+  const scorePct = Number(inspection.score_pct) || 0;
+  const refDate = parseYMD(String(inspection.date || "").slice(0, 10)) || now;
+  const estado = STATE_LABELS[inspection.status] || inspection.status || "—";
+
+  // --------------------------- Folha 1: Resumo -------------------------------
+  const ws = wb.addWorksheet("Resumo da Inspecção", { views: [{ showGridLines: false }] });
+  const LAST = 11;
+  ws.columns = [{ width: 2.3 }, ...Array.from({ length: 10 }, () => ({ width: 14 }))];
+
+  let row = addBanner(ws, wb, {
+    title: "RELATÓRIO DE INSPECÇÃO — USO INTERNO",
+    meta1: `Localização: ${inspection.location_name || "—"}  ·  Data: ${refDate.toLocaleDateString("pt-PT")}`,
+    meta2: `Inspector: ${inspection.inspector_name || "—"}  ·  Estado: ${estado}  ·  Âmbito: 1 inspecção`,
+    meta3: `Ficheiro gerado em ${fmtDateTime(now)} pelo FIMS`,
+    logo, lastCol: LAST,
+  });
+
+  // --- Indicadores da inspecção (KPI cards, mesmo estilo do diário/mensal)
+  row = addSectionTitle(ws, row, LAST, "INDICADORES DA INSPECÇÃO");
+  const sl = scoreLabel(scorePct);
+  const obsCount = (inspection.items || []).filter(it => it.comment && String(it.comment).trim()).length;
+  row = addKpiCards(ws, row, [
+    { label: "Score Total", value: `${scorePct}%`, sub: sl.label, color: sl.color },
+    { label: "Itens Avaliados", value: st.itemsScored.length, sub: `de ${st.itemsAll.length} itens`, color: NEM.dark },
+    { label: "Defeitos Registados", value: st.defectCount, sub: st.itemsScored.length ? `${fmtPct(st.defectCount, st.itemsScored.length, 1)}% dos itens` : null, color: NEM.purple },
+    { label: "Áreas Avaliadas", value: st.sections.length, color: NEM.main },
+    { label: "Observações", value: obsCount, sub: "itens com comentário", color: NEM.dark },
+  ], LAST);
+  row += 1;
+
+  // --- Desempenho por área (idêntico ao relatório diário)
+  if (st.sections.length) {
+    row = addSectionTitle(ws, row, LAST, "DESEMPENHO POR ÁREA (CATEGORIA)");
+    const maxDef = Math.max(1, ...st.sections.map(s => s.defects));
+    const areaRows = st.sections.map(s => ([
+      { v: s.name },
+      { v: s.items },
+      { v: s.defects, color: s.defects ? NEM.purple : NEM.text },
+      { v: s.avgPct / 100, numFmt: "0%", font: { name: FONT, size: 10, bold: true, color: scoreLabel(s.avgPct).color } },
+      { bar: Math.round((s.defects / maxDef) * 24), color: NEM.purple }, { }, { }, { }, { },
+    ]));
+    row = addTable(ws, row,
+      [{ header: "Área" }, { header: "Itens avaliados" }, { header: "Defeitos" }, { header: "Score médio" }].concat(Array.from({ length: 5 }, () => ({ header: "" }))),
+      areaRows, { mergeFirst: 2, lastCol: LAST });
+    row += 1;
+  }
+
+  // --- Itens com score ≤ 3 (mesma regra/cores do relatório diário)
+  row = addSectionTitle(ws, row, LAST, "RESULTADOS CRÍTICOS (SCORE ≤ 3)");
+  const findings = [];
+  (inspection.items || []).forEach(it => {
+    if (it.score !== null && it.score !== undefined && Number(it.score) <= 3) findings.push({ item: it });
+  });
+  if (findings.length) {
+    const sevColor = { 1: NEM.red, 2: NEM.orange, 3: "FFBA7517" };
+    const sevLabel = s => (s === 1 ? "Crítica" : s === 2 ? "Alta" : "Média");
+    const findRows = findings.map(f => ([
+      { v: nameOfSection(inspection, f.item.section_id) },
+      { v: f.item.label || f.item.text || "Item", align: "left" },
+      { v: `${f.item.score}/5`, color: sevColor[Number(f.item.score)] || NEM.text, bold: true },
+      { v: sevLabel(Number(f.item.score)), color: sevColor[Number(f.item.score)] || NEM.text },
+      { v: (f.item.comment || "—"), wrap: true, align: "left" }, { }, { }, { }, { }, { },
+    ]));
+    row = addTable(ws, row,
+      [{ header: "Área" }, { header: "Item", align: "left" }, { header: "Score" }, { header: "Severidade" }, { header: "Observação", align: "left" }],
+      findRows, { mergeFirst: 1, mergeLast: true, lastCol: LAST });
+  } else {
+    setCell(ws, row, 2, { v: "✓ Nenhum resultado crítico — todas as áreas pontuaram 4 ou 5.", font: { name: FONT, size: 10, bold: true, color: { argb: NEM.green } } });
+    ws.mergeCells(row, 2, row, LAST);
+    row += 1;
+  }
+  row += 1;
+
+  // --- Resumo da inspecção (bullets; altura adaptada a textos longos)
+  row = addSectionTitle(ws, row, LAST, "RESUMO DA INSPECÇÃO");
+  const bullets = [];
+  bullets.push(`Inspecção realizada em ${refDate.toLocaleDateString("pt-PT")} por ${inspection.inspector_name || "—"}, com ${st.itemsScored.length} de ${st.itemsAll.length} itens avaliados — score global de ${scorePct}% (${sl.label}).`);
+  if (st.defectCount > 0) {
+    const top = st.sections.filter(s => s.defects > 0).sort((a, b) => b.defects - a.defects)[0];
+    bullets.push(`Foram registados ${st.defectCount} defeito(s) (itens com score < 3)${top ? `; área mais afectada: "${top.name}" (${top.defects}).` : "."}`);
+    bullets.push(`Itens com severidade Crítica/Alta (score ≤ 2): ${st.defects.filter(it => Number(it.score) <= 2).length}.`);
+  } else {
+    bullets.push("Não foram registados defeitos (nenhum item com score < 3).");
+  }
+  if (scorePct > 0 && scorePct < 60) bullets.push("Score global abaixo de 60% — inspecção com nível crítico (regra de alerta existente do FIMS).");
+  const notes = String(inspection.notes || "").trim();
+  if (notes) bullets.push(`Notas do inspector: ${notes.slice(0, 600)}${notes.length > 600 ? "…" : ""}`);
+
+  bullets.forEach(b => {
+    setCell(ws, row, 2, { v: "•  " + b, font: fMeta, align: { wrapText: true, vertical: "top" }, fill: { type: "pattern", pattern: "solid", fgColor: { argb: NEM.light } }, border: BOX });
+    ws.mergeCells(row, 2, row, LAST);
+    for (let c = 3; c <= LAST; c++) setCell(ws, row, c, { fill: { type: "pattern", pattern: "solid", fgColor: { argb: NEM.light } }, border: BOX });
+    ws.getRow(row).height = Math.max(18, Math.ceil(b.length / 105) * 15 + 6);
+    row += 1;
+  });
+
+  applyPrintSetup(ws, { landscape: true, scale: 90 });
+
+  // ------------------------ Folha 2: Itens Avaliados -------------------------
+  const ws2 = wb.addWorksheet("Itens Avaliados", { views: [{ showGridLines: false }] });
+  ws2.columns = [
+    { width: 2.3 }, { width: 26 }, { width: 46 }, { width: 9 }, { width: 12 },
+    { width: 46 }, { width: 34 },
+  ];
+  ws2.getRow(1).height = 24;
+  setCell(ws2, 1, 1, {
+    v: `DETALHE DOS ITENS — ${inspection.location_name || ""} · ${refDate.toLocaleDateString("pt-PT")}`,
+    font: { name: FONT, size: 12, bold: true, color: { argb: NEM.white } },
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: NEM.dark } },
+    align: { vertical: "middle", horizontal: "left", indent: 1 },
+  });
+  ws2.mergeCells(1, 1, 1, 7);
+
+  const scoreColor = s => (s === 1 ? NEM.red : s === 2 ? NEM.orange : s === 3 ? "FFBA7517" : NEM.green);
+  const itemRows = (inspection.items || []).map(it => {
+    const s = it.score !== null && it.score !== undefined ? Number(it.score) : null;
+    return [
+      { v: nameOfSection(inspection, it.section_id) },
+      { v: it.label || it.text || "Item", align: "left" },
+      { v: s !== null ? `${s}/5` : "—", color: s !== null ? scoreColor(s) : NEM.grey, bold: true },
+      { v: s !== null && s <= 3 ? (s === 1 ? "Crítica" : s === 2 ? "Alta" : "Média") : "—", color: s !== null && s <= 3 ? scoreColor(s) : NEM.grey },
+      { v: it.comment || "", wrap: true, align: "left" },
+      { v: it.qc_comment || "", wrap: true, align: "left" },
+    ];
+  });
+
+  addTable(ws2, 2,
+    [{ header: "Secção" }, { header: "Item", align: "left" }, { header: "Score" }, { header: "Severidade" }, { header: "Comentário do Inspector", align: "left" }, { header: "Comentário QC", align: "left" }],
+    itemRows, { lastCol: 7, autoFilter: true, freezeAt: 2 });
+
+  applyPrintSetup(ws2, { landscape: true, scale: 80 });
+
+  return wb;
+}
+
+// ---------------------------------------------------------------------------
 // API de alto nível (browser): construir + descarregar o ficheiro
 // ---------------------------------------------------------------------------
 function safeName(s) { return String(s || "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_") || "Cliente"; }
@@ -706,6 +881,13 @@ export async function generateDailyExcel({ client, inspections, dateStr, logo })
   const wb = await buildDailyWorkbook({ client, inspections, dateStr, logo, now: new Date() });
   const buf = await wb.xlsx.writeBuffer();
   triggerDownload(buf, `Nemchem_Diario_${safeName(client?.name)}_${String(dateStr).replace(/-/g, "")}.xlsx`);
+}
+
+export async function generateInspectionExcel({ inspection, logo, now = new Date() }) {
+  const wb = await buildInspectionWorkbook({ inspection, logo, now });
+  const buf = await wb.xlsx.writeBuffer();
+  const d = String(inspection?.date || "").replace(/-/g, "").slice(0, 8);
+  triggerDownload(buf, `Nemchem_Inspecao_Interna_${safeName(inspection?.location_name)}_${d}.xlsx`);
 }
 
 function triggerDownload(buf, filename) {
