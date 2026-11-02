@@ -4,7 +4,6 @@ import { jsPDF } from "jspdf";
 import logoUrl from '../LOGO.png';
 import { timingService } from "../services/timingService";
 import { logService } from "../services/logService";
-import timingService from "../services/timingService";
 import { Icon } from "../lib/icons";
 import { generateInspectionExcel, fetchExcelLogo } from "../lib/excelReport";
 import ScoreRing from "../components/ScoreRing";
@@ -461,7 +460,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
       alert("Erro ao gerar PDF: " + (error && error.message ? error.message : "tente novamente"));
     }
   };
-  const handleDownloadWord = (reportType = "internal", lang = "pt") => {
+  const handleDownloadWord = async (reportType = "internal", lang = "pt") => {
     try {
       const S = lang === "en" ? STR_EN : STR_PT;
       logService.log(currentUser, "Descarregou Word (" + reportType + ")", "report", inspection.location_name || "");

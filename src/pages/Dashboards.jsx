@@ -357,7 +357,7 @@ export function InspectorDashboard({ inspections, users, currentUser, onStartIns
         const dueToday = myI.filter(i => i.date === today && !['submitted','reviewed','closed','deleted'].includes(i.status));
         const overdue = myI.filter(i => { if (['submitted','reviewed','closed','deleted'].includes(i.status) || !i.date) return false; return new Date(i.date).getTime() < Date.now() - 48*3600000; });
         if (dueToday.length === 0 && overdue.length === 0) return null;
-        return (<div className="card" style={{ marginBottom: 16, padding: 14, borderLeft: "4px solid #A32D2D", background: "#FEF2F2" }}>{dueToday.length > 0 && <div style={{ fontSize: 14, fontWeight: 600, color: "#A32D2D", marginBottom: 4 }}>{dueToday.length} inspecao(oes) marcadas para hoje</div>}{overdue.length > 0 && <div style={{ fontSize: 14, fontWeight: 600, color: "#A32D2D" }}>{overdue.length} inspecao(oes) em atraso (> 48h)</div>}</div>);
+        return (<div className="card" style={{ marginBottom: 16, padding: 14, borderLeft: "4px solid #A32D2D", background: "#FEF2F2" }}>{dueToday.length > 0 && <div style={{ fontSize: 14, fontWeight: 600, color: "#A32D2D", marginBottom: 4 }}>{dueToday.length} inspecao(oes) marcadas para hoje</div>}{overdue.length > 0 && <div style={{ fontSize: 14, fontWeight: 600, color: "#A32D2D" }}>{overdue.length} inspecao(oes) em atraso ({'>'} 48h)</div>}</div>);
       })()}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px", flexWrap: "wrap", gap: 12 }} className="no-print">
         <div>
