@@ -790,7 +790,7 @@ export async function buildInspectionWorkbook({ inspection, logo, now = new Date
     const findRows = findings.map(f => ([
       { v: nameOfSection(inspection, f.item.section_id) },
       { v: f.item.label || f.item.text || "Item", align: "left" },
-      { v: `${f.item.score}/5`, color: sevColor[Number(f.item.score)] || NEM.text, bold: true },
+      { v: `${f.item.score}`, color: sevColor[Number(f.item.score)] || NEM.text, bold: true },
       { v: sevLabel(Number(f.item.score)), color: sevColor[Number(f.item.score)] || NEM.text },
       { v: (f.item.comment || "—"), wrap: true, align: "left" }, { }, { }, { }, { }, { },
     ]));
@@ -850,7 +850,7 @@ export async function buildInspectionWorkbook({ inspection, logo, now = new Date
     return [
       { v: nameOfSection(inspection, it.section_id) },
       { v: it.label || it.text || "Item", align: "left" },
-      { v: s !== null ? `${s}/5` : "—", color: s !== null ? scoreColor(s) : NEM.grey, bold: true },
+      { v: s !== null ? `${s}` : "—", color: s !== null ? scoreColor(s) : NEM.grey, bold: true },
       { v: s !== null && s <= 3 ? (s === 1 ? "Crítica" : s === 2 ? "Alta" : "Média") : "—", color: s !== null && s <= 3 ? scoreColor(s) : NEM.grey },
       { v: it.comment || "", wrap: true, align: "left" },
       { v: it.qc_comment || "", wrap: true, align: "left" },
