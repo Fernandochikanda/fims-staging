@@ -38,6 +38,8 @@ export const fetchMediaDataUrl = async (url) => {
 
 /**
  * Logotipo oficial comprimido via canvas (JPEG) para Word/PDF.
+ * O LOGO.png é RGBA ~93% transparente: sem o fill branco prévio, o JPEG
+ * fica com fundo PRETO e o logotipo desaparece. Fundo branco garantido.
  * Devolve { dataUrl, width, height } com a proporção real; null se falhar.
  */
 export const fetchLogoAsset = (logoSrc, maxW = 360) =>
@@ -51,7 +53,10 @@ export const fetchLogoAsset = (logoSrc, maxW = 360) =>
         const canvas = document.createElement("canvas");
         canvas.width = w;
         canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
         const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
         resolve({ dataUrl, width: w, height: h });
       };

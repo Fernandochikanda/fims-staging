@@ -244,26 +244,18 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
         return name.includes("PESSOAL") || name.includes("STAFF") || name.includes("EQUIPA") || id.includes("pessoal") || id.includes("staff");
       };
 
-      let logoDataUrl = null;
-      try {
-        const response = await fetch(logoUrl);
-        const blob = await response.blob();
-        logoDataUrl = await new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result);
-          reader.readAsDataURL(blob);
-        });
-      } catch (e) { console.warn("Erro ao carregar logo:", e); }
+      // Logotipo com fundo BRANCO garantido (LOGO.png é ~93% transparente;
+      // o PNG cru sobre a faixa escura tornava-o invisível)
+      const logoAsset = await fetchLogoAsset(logoUrl);
 
       doc.setFillColor(30, 42, 58);
       doc.rect(0, 0, 210, 30, 'F');
-      if (logoDataUrl) {
+      if (logoAsset) {
         try {
           doc.setFillColor(255, 255, 255);
           doc.roundedRect(13, 6, 34, 18, 2, 2, 'F');
-          const lsz = await getImageSize(logoDataUrl);
-          const ld = fitDims(lsz?.w, lsz?.h, 28, 14);
-          doc.addImage(logoDataUrl, 'PNG', 13 + (34 - ld.width) / 2, 6 + (18 - ld.height) / 2, ld.width, ld.height);
+          const ld = fitDims(logoAsset.width, logoAsset.height, 28, 14);
+          doc.addImage(logoAsset.dataUrl, 'JPEG', 13 + (34 - ld.width) / 2, 6 + (18 - ld.height) / 2, ld.width, ld.height);
         } catch (e) { console.warn("Erro ao adicionar logo ao PDF:", e); }
       }
       doc.setTextColor(255, 255, 255);

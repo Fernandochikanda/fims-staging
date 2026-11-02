@@ -14,6 +14,7 @@ import ScoreRing from "./ScoreRing";
 import defectService from "../services/defectService";
 import { useComms } from "../context/CommsContext";
 import logoUrl from "../LOGO.png";
+import { fetchLogoAsset, fitDims } from "../lib/reportMedia";
 
 const PERIODS = [
   { id: "week", label: "Esta semana", days: 7 },
@@ -244,17 +245,9 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
   };
 
   const handleDownloadExcel = async () => {
-    let logoImg = "";
-    try {
-      const response = await fetch(logoUrl);
-      const blob = await response.blob();
-      logoImg = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.readAsDataURL(blob);
-      });
-    } catch (e) {}
-    const logoHtml = logoImg ? `<img src="${logoImg}" height="48" style="float:left;margin-right:12px" />` : "";
+    // Fundo branco garantido (LOGO.png é ~93% transparente)
+    const logoAsset = await fetchLogoAsset(logoUrl);
+    const logoHtml = logoAsset ? `<img src="${logoAsset.dataUrl}" width="${logoAsset.width}" height="${logoAsset.height}" style="float:left;margin-right:12px" />` : "";
 
     const esc = (v) => String(v == null ? "—" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -331,19 +324,15 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
 
   const handleBoardroomPDF = async () => {
     const doc = new jsPDF();
-    let logoDataUrl = null;
-    try {
-      const response = await fetch(logoUrl);
-      const blob = await response.blob();
-      logoDataUrl = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.readAsDataURL(blob);
-      });
-    } catch (e) {}
+    // Fundo branco garantido (LOGO.png é ~93% transparente) + proporção real
+    const logo = await fetchLogoAsset(logoUrl);
     doc.setFillColor(30, 42, 58); doc.rect(0, 0, 210, 30, 'F');
-    if (logoDataUrl) {
-      try { doc.setFillColor(255, 255, 255); doc.roundedRect(13, 6, 34, 18, 2, 2, 'F'); doc.addImage(logoDataUrl, 'PNG', 15, 8, 30, 14); } catch (e) {}
+    if (logo) {
+      try {
+        doc.setFillColor(255, 255, 255); doc.roundedRect(13, 6, 34, 18, 2, 2, 'F');
+        const ld = fitDims(logo.width, logo.height, 28, 14);
+        doc.addImage(logo.dataUrl, 'JPEG', 13 + (34 - ld.width) / 2, 6 + (18 - ld.height) / 2, ld.width, ld.height);
+      } catch (e) {}
     }
     doc.setTextColor(255, 255, 255); doc.setFontSize(18); doc.setFont("helvetica", "bold");
     doc.text("FIMS - Executive Summary", 55, 16);

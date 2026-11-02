@@ -112,6 +112,8 @@ function stateColor(status) {
 /**
  * Logotipo oficial para o cabeçalho do Excel, redimensionado via canvas
  * (JPEG base64, largura final 132 px) — partilhado por TODOS os exports.
+ * O LOGO.png é RGBA ~93% transparente: o fill branco prévio evita que o
+ * JPEG saia com fundo preto e o logotipo fique invisível.
  */
 export function fetchExcelLogo(logoSrc) {
   return new Promise((resolve) => {
@@ -124,7 +126,10 @@ export function fetchExcelLogo(logoSrc) {
         const h = Math.max(1, Math.round(img.naturalHeight * scale));
         const canvas = document.createElement("canvas");
         canvas.width = w; canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
         const b64 = canvas.toDataURL("image/jpeg", 0.9).split(",")[1];
         const width = 132;
         resolve({ base64: b64, extension: "jpeg", width, height: Math.round(width * h / w) });
