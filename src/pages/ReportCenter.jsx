@@ -6,6 +6,7 @@ import { calcScore, getCategoryHealth } from "../lib/helpers";
 import { getClientTemplate } from "../data/constants";
 import { photoStore } from "../lib/photoStore";
 import { generateMonthlyExcel, generateDailyExcel, fetchExcelLogo } from "../lib/excelReport";
+import { fetchLogoAsset, fetchFittedPhoto, wordPhotoTable, wordKpiTable, fitDims, getImageSize } from "../lib/reportMedia";
 import logoUrl from "../LOGO.png";
 
 export default function ReportCenter({ inspections, locations, users }) {
@@ -134,14 +135,24 @@ export default function ReportCenter({ inspections, locations, users }) {
     // --- CORPORATE HEADER ---
     doc.setFillColor(30, 42, 58);
     doc.rect(0, 0, 210, 38, 'F');
+    // Logotipo real (LOGO.png) em caixa branca, proporção preservada
+    const logoAsset = await fetchLogoAsset(logoUrl);
+    if (logoAsset) {
+      try {
+        doc.setFillColor(255, 255, 255);
+        doc.roundedRect(12, 7, 34, 24, 2, 2, 'F');
+        const ld = fitDims(logoAsset.width, logoAsset.height, 30, 20);
+        doc.addImage(logoAsset.dataUrl, 'JPEG', 12 + (34 - ld.width) / 2, 7 + (24 - ld.height) / 2, ld.width, ld.height);
+      } catch (e) { console.warn("Logo PDF:", e); }
+    }
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(22);
     doc.setFont("helvetica", "bold");
-    doc.text("NEMCHEM", 14, 22);
+    doc.text("NEMCHEM", 54, 20);
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
-    doc.text("Avª Joaquim Chissano nº2305, Matola – Moçambique", 14, 30);
-    doc.text("Tel: 21 74 94 26 / 84 300 7940 | supervisao@nemchem.co.mz", 14, 36);
+    doc.text("Avª Joaquim Chissano nº2305, Matola – Moçambique", 54, 28);
+    doc.text("Tel: 21 74 94 26 / 84 300 7940 | supervisao@nemchem.co.mz", 54, 34);
     
     // --- TITLE ---
     y = 52;
@@ -434,7 +445,15 @@ export default function ReportCenter({ inspections, locations, users }) {
   const generateWord = async (client, inspData, dateStr, type) => {
     const insp = inspData[0];
     const isDaily = type === "daily";
-    
+    // Logotipo real (LOGO.png) comprimido para embutir no HTML-Word
+    const logo = await fetchLogoAsset(logoUrl);
+    const logoImg = logo
+      ? `<img src="${logo.dataUrl}" width="108" height="${Math.round(logo.height * 108 / logo.width)}" alt="NemChem" />`
+      : "";
+    const logoCell = logoImg
+      ? `<td style="background:#FFFFFF;padding:8px 14px;vertical-align:middle;">${logoImg}</td>`
+      : "";
+
     let html = `<!DOCTYPE html>
 <html xmlns:o='urn:schemas-microsoft-com:office:office' 
       xmlns:w='urn:schemas-microsoft-com:office:word' 
@@ -444,202 +463,50 @@ export default function ReportCenter({ inspections, locations, users }) {
   <title>Relatório ${isDaily ? 'Diário' : 'Mensal'}</title>
   <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View></w:WordDocument></xml><![endif]-->
   <style>
-    body { 
-      font-family: 'Arial', 'Helvetica', sans-serif; 
-      font-size: 11pt; 
-      color: #333333;
-      margin: 40px;
-      line-height: 1.5;
-    }
-    .header { 
-      background-color: #1E2A3A; 
-      color: white; 
-      padding: 20px 25px; 
-      margin-bottom: 25px;
-    }
-    .header h1 { 
-      font-size: 22pt; 
-      margin: 0;
-      font-weight: bold;
-      letter-spacing: 1px;
-    }
-    .header p { 
-      font-size: 9pt; 
-      margin: 5px 0 0 0;
-      opacity: 0.8;
-    }
-    .title { 
-      text-align: center; 
-      font-size: 14pt; 
-      font-weight: bold; 
-      margin: 30px 0 20px 0; 
-      text-transform: uppercase;
-      color: #1E2A3A;
-      letter-spacing: 2px;
-      border-bottom: 2px solid #1E2A3A;
-      padding-bottom: 12px;
-    }
-    .meta { 
-      margin-bottom: 25px;
-      background: #F8F7F4;
-      padding: 15px 20px;
-      border-left: 4px solid #1E2A3A;
-    }
-    .meta div { 
-      margin-bottom: 3px;
-      font-size: 10pt;
-    }
-    .meta strong {
-      color: #1E2A3A;
-    }
-    .summary { 
-      background: #F8F7F4; 
-      padding: 15px 20px; 
-      margin-bottom: 25px; 
-      font-style: italic; 
-      border-left: 4px solid #1E2A3A;
-      font-size: 10pt;
-      color: #333;
-    }
-    h2 { 
-      color: #1E2A3A; 
-      border-bottom: 2px solid #E5E7EB; 
-      padding-bottom: 8px; 
-      font-size: 13pt; 
-      margin-top: 30px;
-      margin-bottom: 16px;
-    }
-    .finding { 
-      margin-bottom: 20px; 
-      padding: 15px 18px; 
-      border: 1px solid #E5E7EB; 
-      background: #FFFFFF;
-      border-radius: 4px;
-    }
-    .finding h3 { 
-      margin: 0 0 8px 0; 
-      font-size: 11pt; 
-      color: #A32D2D;
-    }
-    .score-badge {
-      display: inline-block;
-      padding: 2px 14px;
-      border-radius: 12px;
-      font-weight: bold;
-      font-size: 10pt;
-      color: white;
-    }
+    @page { size: A4; margin: 2cm; }
+    body { font-family: 'Arial', 'Helvetica', sans-serif; font-size: 11pt; color: #333333; line-height: 1.5; }
+    .title { text-align: center; font-size: 14pt; font-weight: bold; margin: 26px 0 18px 0; text-transform: uppercase; color: #1E2A3A; letter-spacing: 2px; border-bottom: 2px solid #1E2A3A; padding-bottom: 12px; }
+    .meta { margin-bottom: 22px; background: #F8F7F4; padding: 14px 18px; border-left: 4px solid #1E2A3A; }
+    .meta div { margin-bottom: 3px; font-size: 10pt; }
+    .meta strong { color: #1E2A3A; }
+    .summary { background: #F8F7F4; padding: 14px 18px; margin-bottom: 22px; font-style: italic; border-left: 4px solid #EF9F27; font-size: 10pt; color: #444444; }
+    h2 { color: #1E2A3A; border-bottom: 2px solid #E5E7EB; border-left: 5px solid #EF9F27; padding: 2px 0 8px 10px; font-size: 13pt; margin-top: 28px; margin-bottom: 14px; }
+    .finding { margin-bottom: 18px; padding: 12px 16px; border: 1px solid #E5E7EB; border-left: 4px solid #A32D2D; background: #FFFFFF; }
+    .finding h3 { margin: 0 0 8px 0; font-size: 11pt; color: #A32D2D; }
+    .score-badge { display: inline-block; padding: 2px 14px; font-weight: bold; font-size: 10pt; color: white; }
     .score-critical { background: #A32D2D; }
     .score-high { background: #EF9F27; }
-    .score-medium { background: #FAC775; color: #333; }
-    .score-ok { background: #0F6E56; }
-    .kpi-grid { 
-      display: table; 
-      width: 100%; 
-      margin: 20px 0; 
-      border-collapse: collapse;
-    }
-    .kpi-card { 
-      display: table-cell; 
-      width: 25%; 
-      background: #1E2A3A; 
-      color: white; 
-      padding: 15px 10px; 
-      text-align: center; 
-      border: 2px solid white;
-    }
-    .kpi-val { 
-      font-size: 20pt; 
-      font-weight: bold; 
-      display: block;
-    }
-    .kpi-lbl { 
-      font-size: 9pt; 
-      display: block;
-      opacity: 0.8;
-    }
-    .daily-log { 
-      margin-bottom: 25px;
-      padding: 15px 18px;
-      background: #FAFAFA;
-      border-left: 3px solid #1E2A3A;
-    }
-    .daily-log h3 { 
-      margin: 0 0 8px 0; 
-      color: #1E2A3A;
-      font-size: 11pt;
-    }
-    .photo-grid { 
-      display: table; 
-      width: 100%; 
-      margin: 10px 0;
-      border-collapse: collapse;
-    }
-    .photo-cell { 
-      display: table-cell; 
-      width: 33.33%; 
-      padding: 5px;
-      text-align: center;
-      vertical-align: middle;
-    }
-    .photo-cell img { 
-      width: 100%; 
-      max-height: 150px; 
-      object-fit: cover;
-      border: 1px solid #E5E7EB;
-      border-radius: 4px;
-    }
-    .signatures { 
-      margin-top: 50px; 
-      display: table; 
-      width: 100%;
-      border-collapse: collapse;
-    }
-    .sig-cell { 
-      display: table-cell; 
-      width: 50%; 
-      text-align: center; 
-      padding-top: 20px; 
-      border-top: 2px solid #333;
-      padding: 20px 10px 0 10px;
-    }
-    .sig-cell img {
-      max-width: 150px;
-      max-height: 50px;
-      object-fit: contain;
-    }
-    .sig-cell strong {
-      display: block;
-      margin-top: 8px;
-      font-size: 10pt;
-      color: #1E2A3A;
-    }
-    .sig-cell .sig-name {
-      font-size: 10pt;
-      color: #888;
-      margin-top: 4px;
-    }
-    .footer { 
-      margin-top: 40px; 
-      text-align: center; 
-      font-size: 9pt; 
-      color: #888; 
-      border-top: 1px solid #E5E7EB; 
-      padding-top: 15px;
-    }
-    .page-break { page-break-before: always; }
-    .text-muted { color: #888; font-size: 10pt; }
-    .mt-2 { margin-top: 12px; }
+    .score-medium { background: #FAC775; color: #333333; }
+    .kpi-grid { display: table; width: 100%; margin: 18px 0; border-collapse: collapse; }
+    .kpi-card { display: table-cell; width: 25%; background: #1E2A3A; color: white; padding: 14px 8px; text-align: center; border: 2px solid white; }
+    .kpi-val { font-size: 18pt; font-weight: bold; display: block; color: #FAC775; }
+    .kpi-lbl { font-size: 8pt; display: block; color: #C9D2DC; text-transform: uppercase; letter-spacing: 1px; }
+    .daily-log { margin-bottom: 22px; padding: 12px 16px; background: #FAFAFA; border-left: 3px solid #1E2A3A; }
+    .daily-log h3 { margin: 0 0 8px 0; color: #1E2A3A; font-size: 11pt; }
+    .signatures { margin-top: 46px; display: table; width: 100%; border-collapse: collapse; }
+    .sig-cell { display: table-cell; width: 50%; text-align: center; vertical-align: bottom; padding: 18px 12px 0 12px; border-top: 2px solid #333333; }
+    .sig-cell strong { display: block; margin-top: 6px; font-size: 10pt; color: #1E2A3A; }
+    .sig-cell .sig-name { font-size: 10pt; color: #888888; margin-top: 2px; }
+    .footer { margin-top: 40px; text-align: center; font-size: 8pt; color: #888888; border-top: 2px solid #1E2A3A; padding-top: 12px; }
+    .ok-box { padding: 14px 16px; background: #ECFDF5; color: #065F46; border: 1px solid #10B981; border-left: 5px solid #10B981; }
   </style>
 </head>
 <body>`;
 
-    // HEADER
-    html += `<div class="header">
-      <h1>NEMCHEM</h1>
-      <p>Avª Joaquim Chissano nº2305, Matola – Moçambique<br/>
-      Tel: 21 74 94 26 / 84 300 7940 | supervisao@nemchem.co.mz</p>
-    </div>`;
+    // HEADER — logotipo real NemChem (LOGO.png) em caixa branca sobre faixa escura
+    html += `<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+      <tr><td style="background:#1E2A3A;padding:16px 22px;">
+        <table cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>
+          ${logoCell}
+          <td style="padding-left:${logoCell ? "16" : "0"}px;vertical-align:middle;">
+            <div style="font-size:20pt;font-weight:bold;color:#FFFFFF;letter-spacing:2px;">NEMCHEM</div>
+            <div style="font-size:8pt;color:#C9D2DC;">FIMS — Sistema de Gestão de Inspecções</div>
+            <div style="font-size:8pt;color:#9FB0C0;">Avª Joaquim Chissano nº2305, Matola – Moçambique<br/>Tel: 21 74 94 26 / 84 300 7940 | supervisao@nemchem.co.mz</div>
+          </td>
+        </tr></table>
+      </td></tr>
+      <tr><td style="background:#EF9F27;height:6px;font-size:1px;line-height:6px;">&nbsp;</td></tr>
+    </table>`;
 
     // TITLE
     html += `<div class="title">${isDaily ? 'Relatório Diário de Inspeção' : 'Relatório Mensal de Atividades'}</div>`;
@@ -654,28 +521,28 @@ export default function ReportCenter({ inspections, locations, users }) {
     </div>`;
 
     // SUMMARY
-    const summaryText = isDaily 
+    const summaryText = isDaily
       ? "📋 Durante a inspeção de hoje, foram avaliadas todas as áreas conforme o plano de qualidade. Os resultados críticos estão detalhados abaixo, com as respetivas evidências fotográficas e observações."
       : "📊 Durante o período em análise, todas as inspeções e atividades de limpeza agendadas foram realizadas conforme o programa de manutenção acordado. A qualidade geral do serviço permaneceu satisfatória, com operações de rotina concluídas com sucesso.";
     html += `<div class="summary">${summaryText}</div>`;
 
     if (isDaily) {
-      // DAILY REPORT
+      // DAILY REPORT — cartões KPI (Word-safe: display:table)
       const totalItems = inspData.reduce((s, i) => s + (i.items || []).length, 0);
       const completedItems = inspData.reduce((s, i) => s + (i.items || []).filter(it => it.score !== null).length, 0);
       const avgScore = Math.round(inspData.reduce((s, i) => s + (i.score_pct || 0), 0) / inspData.length);
-      
-      html += `<h2>1. Resumo do Dia</h2>
-        <div style="padding: 0 5px;">
-          <div>• Total de itens avaliados: <strong>${totalItems}</strong></div>
-          <div>• Itens com pontuação: <strong>${completedItems}</strong> (${Math.round(completedItems/totalItems*100)}%)</div>
-          <div>• Score médio do dia: <strong>${avgScore}%</strong></div>
-          <div>• Inspeções realizadas: <strong>${inspData.length}</strong></div>
-        </div>
-      `;
+      const taxa = totalItems ? Math.round(completedItems / totalItems * 100) : 0;
+
+      html += `<h2>1. Resumo do Dia</h2>` +
+        wordKpiTable([
+          { value: inspData.length, label: "Inspecções" },
+          { value: `${avgScore}%`, label: "Score Médio" },
+          { value: totalItems, label: "Itens Avaliados" },
+          { value: `${taxa}%`, label: "Taxa de Avaliação" },
+        ]);
 
       html += `<h2 style="color: #A32D2D;">2. Resultados Críticos (Score ≤ 3)</h2>`;
-      
+
       let findings = 0;
       for (const insp of inspData) {
         for (const item of (insp.items || [])) {
@@ -684,7 +551,7 @@ export default function ReportCenter({ inspections, locations, users }) {
             const secName = getSectionName(item.section_id);
             const severity = item.score === 1 ? "Crítica" : item.score === 2 ? "Alta" : "Média";
             const scoreClass = item.score === 1 ? "score-critical" : item.score === 2 ? "score-high" : "score-medium";
-            
+
             html += `<div class="finding">
               <h3>${secName}: ${item.label || item.text}</h3>
               <div>
@@ -693,25 +560,24 @@ export default function ReportCenter({ inspections, locations, users }) {
               </div>
               <div style="margin-top: 8px;"><strong>Observação:</strong> ${item.comment || "N/A"}</div>
             `;
-            
+
             const photos = insp.photosByItem?.[item.id] || [];
             if (photos.length > 0) {
-              html += `<div class="photo-grid">`;
-              for (let i = 0; i < Math.min(photos.length, 4); i++) {
-                const base64 = await getBase64(photos[i].url);
-                if (base64) html += `<div class="photo-cell"><img src="${base64}" /></div>`;
+              const fittedPhotos = [];
+              const captions = [];
+              for (const p of photos.slice(0, 4)) {
+                const fp = await fetchFittedPhoto(p.url, 200, 150);
+                if (fp) { fittedPhotos.push(fp); captions.push(`${secName} — ${item.label || item.text || "Item"}`); }
               }
-              html += `</div>`;
+              html += wordPhotoTable(fittedPhotos, { perRow: 3, boxW: 200, boxH: 150, caption: captions });
             }
             html += `</div>`;
           }
         }
       }
-      
+
       if (findings === 0) {
-        html += `<div style="padding: 15px; background: #ECFDF5; border-radius: 4px; color: #065F46; border: 1px solid #10B981;">
-          ✅ Nenhum resultado crítico encontrado. Todas as áreas pontuaram 4 ou 5.
-        </div>`;
+        html += `<div class="ok-box">✅ Nenhum resultado crítico encontrado. Todas as áreas pontuaram 4 ou 5.</div>`;
       }
 
     } else {
@@ -720,15 +586,14 @@ export default function ReportCenter({ inspections, locations, users }) {
       const avgScore = Math.round(inspData.reduce((s, i) => s + (i.score_pct || 0), 0) / totalInsps);
       const criticals = inspData.reduce((s, i) => s + (i.items || []).filter(it => it.score !== null && it.score <= 2).length, 0);
       const totalItems = inspData.reduce((s, i) => s + (i.items || []).length, 0);
-      
-      html += `<h2>1. Resumo de Desempenho Mensal</h2>
-        <div class="kpi-grid">
-          <div class="kpi-card"><span class="kpi-val">${totalInsps}</span><span class="kpi-lbl">Inspeções</span></div>
-          <div class="kpi-card"><span class="kpi-val">${avgScore}%</span><span class="kpi-lbl">Score Médio</span></div>
-          <div class="kpi-card"><span class="kpi-val">${criticals}</span><span class="kpi-lbl">Críticos</span></div>
-          <div class="kpi-card"><span class="kpi-val">${totalItems}</span><span class="kpi-lbl">Itens Avaliados</span></div>
-        </div>
-      `;
+
+      html += `<h2>1. Resumo de Desempenho Mensal</h2>` +
+        wordKpiTable([
+          { value: totalInsps, label: "Inspecções" },
+          { value: `${avgScore}%`, label: "Score Médio" },
+          { value: criticals, label: "Críticos" },
+          { value: totalItems, label: "Itens Avaliados" },
+        ]);
 
       html += `<h2>2. Registo de Atividades</h2>`;
       for (const insp of inspData.sort((a, b) => new Date(a.date) - new Date(b.date))) {
@@ -736,45 +601,54 @@ export default function ReportCenter({ inspections, locations, users }) {
         const scored = (insp.items || []).filter(it => it.score !== null).length;
         const critical = (insp.items || []).filter(it => it.score !== null && it.score <= 2).length;
         const dateFormatted = new Date(insp.date).toLocaleDateString("pt-PT", { weekday: 'long', day: 'numeric', month: 'long' });
-        
+
         html += `<div class="daily-log">
           <h3>📅 ${dateFormatted}</h3>
           <div>Score: <strong>${insp.score_pct || 0}%</strong></div>
           <div>Itens avaliados: <strong>${scored}/${total}</strong></div>
           <div>Problemas críticos: <strong>${critical}</strong></div>
         `;
-        
+
         const allPhotos = Object.values(insp.photosByItem || {}).flat();
         if (allPhotos.length > 0) {
-          html += `<div class="photo-grid">`;
-          for (let i = 0; i < Math.min(allPhotos.length, 12); i++) {
-            const base64 = await getBase64(allPhotos[i].url);
-            if (base64) html += `<div class="photo-cell"><img src="${base64}" /></div>`;
+          const fittedPhotos = [];
+          const captions = [];
+          for (const p of allPhotos.slice(0, 12)) {
+            const fp = await fetchFittedPhoto(p.url, 200, 150);
+            if (fp) { fittedPhotos.push(fp); captions.push(dateFormatted); }
           }
-          html += `</div>`;
+          html += wordPhotoTable(fittedPhotos, { perRow: 3, boxW: 200, boxH: 150, caption: captions });
         }
         html += `</div>`;
       }
     }
 
-    // SIGNATURES
-    html += `<div class="signatures">
-      <div class="sig-cell">
-        ${inspData[0]?.inspector_sig ? `<img src="${inspData[0].inspector_sig}" />` : ""}
-        <strong>Inspetor</strong>
-        <div class="sig-name">${inspData[0]?.inspector_name || ""}</div>
-      </div>
-      <div class="sig-cell">
-        ${inspData[0]?.client_sig ? `<img src="${inspData[0].client_sig}" />` : ""}
-        <strong>Cliente</strong>
-        <div class="sig-name">${inspData[0]?.client_mgr_name || ""}</div>
-      </div>
-    </div>`;
+    // SIGNATURES — dimensões calculadas (o Word não suporta object-fit)
+    const fittedSig = async (src) => {
+      if (!src) return null;
+      const size = await getImageSize(src);
+      const d = fitDims(size?.w, size?.h, 150, 50);
+      return { src, ...d };
+    };
+    const sigI = await fittedSig(inspData[0]?.inspector_sig);
+    const sigC = await fittedSig(inspData[0]?.client_sig);
+    html += `<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:46px;"><tr>
+      <td width="50%" align="center" style="border-top:2px solid #333333;padding:18px 12px 0 12px;vertical-align:bottom;">
+        ${sigI ? `<img src="${sigI.src}" width="${sigI.width}" height="${sigI.height}" />` : ""}
+        <div style="margin-top:6px;font-size:10pt;font-weight:bold;color:#1E2A3A;">Inspetor</div>
+        <div style="font-size:10pt;color:#888888;">${inspData[0]?.inspector_name || ""}</div>
+      </td>
+      <td width="50%" align="center" style="border-top:2px solid #333333;padding:18px 12px 0 12px;vertical-align:bottom;">
+        ${sigC ? `<img src="${sigC.src}" width="${sigC.width}" height="${sigC.height}" />` : ""}
+        <div style="margin-top:6px;font-size:10pt;font-weight:bold;color:#1E2A3A;">Cliente</div>
+        <div style="font-size:10pt;color:#888888;">${inspData[0]?.client_mgr_name || ""}</div>
+      </td>
+    </tr></table>`;
 
     // FOOTER
-    html += `<div class="footer">NEMCHEM © 2026 - Documento gerado pelo Nemchem</div>`;
+    html += `<div class="footer">NEMCHEM © ${new Date().getFullYear()} — Documento gerado pelo FIMS em ${new Date().toLocaleString("pt-PT")} — Confidencial</div>`;
     html += `</body></html>`;
-    
+
     const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

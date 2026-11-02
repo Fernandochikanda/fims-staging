@@ -8,6 +8,8 @@ import StatusBadge from "../components/StatusBadge";
 import { Icon } from "../lib/icons";
 import { calcScore, scoreLabel, getMonthlyTrend, getClientRisk, getTopBottomPerformers, SLA_TARGET, getCategoryHealth } from "../lib/helpers";
 import { ROLES, TEMPLATE_SECTIONS } from "../data/constants";
+import { fetchLogoAsset, fitDims } from "../lib/reportMedia";
+import logoUrl from "../LOGO.png";
 import { useLang } from "../context/LangContext";
 import { useComms } from "../context/CommsContext";
 import { useState, useEffect } from "react";
@@ -339,10 +341,20 @@ export function InspectorDashboard({ inspections, users, currentUser, onStartIns
   const today = new Date().toISOString().split("T")[0];
   const completedToday = recent.filter(i => i.date === today).length;
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     const doc = new jsPDF();
-    doc.setFontSize(18); doc.text("Relatório Diário de Inspeções", 14, 22);
-    doc.setFontSize(12); doc.text(`Inspetor: ${currentUser.name}`, 14, 30); doc.text(`Data: ${new Date().toLocaleDateString("pt-PT")}`, 14, 38);
+    // Logotipo real (LOGO.png) em caixa branca, proporção preservada
+    const logo = await fetchLogoAsset(logoUrl);
+    if (logo) {
+      try {
+        doc.setFillColor(255, 255, 255);
+        doc.roundedRect(12, 8, 34, 24, 2, 2, 'F');
+        const ld = fitDims(logo.width, logo.height, 30, 20);
+        doc.addImage(logo.dataUrl, 'JPEG', 12 + (34 - ld.width) / 2, 8 + (24 - ld.height) / 2, ld.width, ld.height);
+      } catch (e) { console.warn("Logo PDF:", e); }
+    }
+    doc.setFontSize(18); doc.text("Relatório Diário de Inspecções", 54, 16);
+    doc.setFontSize(12); doc.text(`Inspetor: ${currentUser.name}`, 54, 24); doc.text(`Data: ${new Date().toLocaleDateString("pt-PT")}`, 54, 31);
     let y = 50; doc.setFontSize(14); doc.text("Atividade Recente:", 14, y); y += 8; doc.setFontSize(11);
     if (recent.length === 0) doc.text("Nenhuma inspeção recente.", 14, y);
     else { recent.slice(0, 10).forEach((insp, i) => { doc.text(`${i + 1}. ${insp.location_name} - ${insp.date} - ${insp.status} - Score: ${insp.score_pct || 0}%`, 14, y); y += 8; }); }

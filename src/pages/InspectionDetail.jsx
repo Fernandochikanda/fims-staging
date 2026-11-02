@@ -6,6 +6,7 @@ import { timingService } from "../services/timingService";
 import { logService } from "../services/logService";
 import { Icon } from "../lib/icons";
 import { generateInspectionExcel, fetchExcelLogo } from "../lib/excelReport";
+import { fetchLogoAsset, fetchFittedPhoto, wordPhotoTable, wordKpiTable, fitDims, getImageSize } from "../lib/reportMedia";
 import ScoreRing from "../components/ScoreRing";
 import StatusBadge from "../components/StatusBadge";
 import { photoStore } from "../lib/photoStore";
@@ -260,7 +261,9 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
         try {
           doc.setFillColor(255, 255, 255);
           doc.roundedRect(13, 6, 34, 18, 2, 2, 'F');
-          doc.addImage(logoDataUrl, 'PNG', 15, 8, 30, 14);
+          const lsz = await getImageSize(logoDataUrl);
+          const ld = fitDims(lsz?.w, lsz?.h, 28, 14);
+          doc.addImage(logoDataUrl, 'PNG', 13 + (34 - ld.width) / 2, 6 + (18 - ld.height) / 2, ld.width, ld.height);
         } catch (e) { console.warn("Erro ao adicionar logo ao PDF:", e); }
       }
       doc.setTextColor(255, 255, 255);
@@ -466,32 +469,78 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
       logService.log(currentUser, "Descarregou Word (" + reportType + ")", "report", inspection.location_name || "");
       const _wtiming = reportType === "internal" ? await timingService.getTiming(inspection.id) : null;
       const _wdur = _wtiming && _wtiming.duration_minutes > 0 ? timingService.formatDuration(_wtiming.duration_minutes) : null;
-      let html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>Export</title>
+      // Logotipo real (LOGO.png) + fotos convertidas para base64 com dimensões
+      // calculadas — o Word não carrega URLs remotas nem suporta object-fit/grid
+      const logo = await fetchLogoAsset(logoUrl);
+      const logoImg = logo ? `<img src="${logo.dataUrl}" width="96" height="${Math.round(logo.height * 96 / logo.width)}" alt="NemChem" />` : "";
+
+      let html = `<!DOCTYPE html>
+<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>Export</title>
       <style>
-        body { font-family: Arial, sans-serif; font-size: 11pt; color: #333; }
-        h1 { background-color: #1E2A3A; color: white; padding: 10px; font-size: 18pt; margin-bottom: 20px; text-align: center; }
-        h2 { color: #1E2A3A; border-bottom: 1px solid #ccc; padding-bottom: 4px; font-size: 14pt; margin-top: 24px; }
-        .meta { margin-bottom: 20px; background: #f8f7f4; padding: 10px; }
-        .meta div { margin-bottom: 4px; }
-        .item { margin-bottom: 8px; padding-left: 10px; border-left: 3px solid #eee; }
-        .score { font-weight: bold; padding: 2px 6px; border-radius: 4px; color: white; font-size: 9pt; }
-        .obs { font-weight: bold; color: #333; margin-bottom: 10px; background: #f9f9f9; padding: 8px; }
-        .cmt { color: #666; font-size: 10pt; margin-left: 15px; }
-        .qc { color: #A32D2D; font-size: 10pt; margin-left: 15px; font-weight: bold; }
-        .photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
-        .photo-grid img { width: 100%; height: 150px; object-fit: cover; border: 1px solid #ddd; }
-        .health-scores { margin: 12px 0; }
-        .health-row { margin-bottom: 10px; }
+        @page { size: A4; margin: 2cm; }
+        body { font-family: Arial, sans-serif; font-size: 11pt; color: #333; line-height: 1.5; }
+        h2 { color: #1E2A3A; border-bottom: 2px solid #E5E7EB; border-left: 5px solid #EF9F27; padding: 2px 0 6px 10px; font-size: 13pt; margin-top: 26px; margin-bottom: 12px; }
+        .kpi-grid { display: table; width: 100%; margin: 16px 0; border-collapse: collapse; }
+        .kpi-card { display: table-cell; width: 25%; background: #1E2A3A; color: white; padding: 12px 6px; text-align: center; border: 2px solid white; }
+        .kpi-val { font-size: 17pt; font-weight: bold; display: block; color: #FAC775; }
+        .kpi-lbl { font-size: 8pt; display: block; color: #C9D2DC; text-transform: uppercase; letter-spacing: 1px; }
+        .meta-tbl { width: 100%; border-collapse: collapse; margin-bottom: 18px; }
+        .meta-tbl td { padding: 4px 10px; font-size: 10pt; border-bottom: 1px solid #E5E7EB; }
+        .meta-tbl td.k { color: #1E2A3A; font-weight: bold; width: 28%; background: #F8F7F4; }
+        .items-tbl { width: 100%; border-collapse: collapse; margin: 6px 0 14px 0; }
+        .items-tbl th { background: #1E2A3A; color: white; font-size: 9pt; text-transform: uppercase; letter-spacing: 1px; padding: 6px 8px; text-align: left; }
+        .items-tbl td { font-size: 10pt; padding: 5px 8px; border-bottom: 1px solid #E5E7EB; vertical-align: top; }
+        .score-chip { color: white; font-weight: bold; font-size: 9pt; padding: 2px 10px; }
+        .obs { background: #F8F7F4; border-left: 4px solid #1E2A3A; padding: 8px 12px; margin: 6px 0 12px 0; font-size: 10pt; }
+        .defect { margin-bottom: 10px; padding: 9px 12px; border-left: 4px solid #A32D2D; background: #FEF2F2; font-size: 10pt; }
+        .defect .ttl { font-weight: bold; color: #A32D2D; }
+        .resolved { margin-bottom: 10px; padding: 9px 12px; border-left: 4px solid #0F6E56; background: #ECFDF5; font-size: 10pt; }
+        .resolved .ttl { font-weight: bold; color: #0F6E56; }
+        .qc { color: #A32D2D; font-size: 9pt; font-weight: bold; }
+        .sig-tbl { width: 100%; border-collapse: collapse; margin-top: 46px; }
+        .sig-tbl td { width: 50%; text-align: center; vertical-align: bottom; border-top: 2px solid #333; padding: 14px 10px 0 10px; }
+        .footer { margin-top: 38px; text-align: center; font-size: 8pt; color: #888; border-top: 2px solid #1E2A3A; padding-top: 10px; }
       </style>
       </head><body>`;
 
-      html += `<h1>${S.title}${reportType === "client" ? " — Cliente" : " — Interno"}</h1><div class="meta">
-        <div><strong>Cliente:</strong> ${inspection.location_name || "N/A"}</div>
-        <div><strong>Data:</strong> ${new Date(inspection.date).toLocaleDateString("pt-PT")}</div>
-        <div><strong>Inspetor:</strong> ${inspection.inspector_name || "N/A"}</div>
-        <div><strong>Pontuação Total:</strong> ${inspection.score_pct || 0}%</div>
-        ${reportType === "internal" && timing && timing.duration_minutes > 0 ? `<div><strong>Duracao:</strong> ${timingService.formatDuration(timing.duration_minutes)}</div>` : ""}
-      </div>`;
+      // CABEÇALHO — logotipo real em caixa branca sobre faixa escura + barra dourada
+      html += `<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+        <tr><td style="background:#1E2A3A;padding:16px 22px;">
+          <table cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>
+            <td style="background:#FFFFFF;padding:8px 14px;vertical-align:middle;">${logoImg}</td>
+            <td style="padding-left:16px;vertical-align:middle;">
+              <div style="font-size:19pt;font-weight:bold;color:#FFFFFF;letter-spacing:2px;">NEMCHEM</div>
+              <div style="font-size:8pt;color:#C9D2DC;">${S.subtitle}</div>
+              <div style="font-size:8pt;color:#9FB0C0;">Avª Joaquim Chissano nº2305, Matola – Moçambique<br/>Tel: 21 74 94 26 / 84 300 7940 | supervisao@nemchem.co.mz</div>
+            </td>
+          </tr></table>
+        </td></tr>
+        <tr><td style="background:#EF9F27;height:6px;font-size:1px;line-height:6px;">&nbsp;</td></tr>
+      </table>`;
+
+      html += `<div style="text-align:center;font-size:14pt;font-weight:bold;color:#1E2A3A;letter-spacing:2px;text-transform:uppercase;margin:24px 0 16px 0;border-bottom:2px solid #1E2A3A;padding-bottom:10px;">${S.title}${reportType === "client" ? " — Cliente" : " — Interno"}</div>`;
+
+      // Cartões KPI do topo
+      const itemsAll = inspection.items || [];
+      const openDefects = itemsAll.filter(it => it.score !== null && it.score < 3).length;
+      const resolvedCount = itemsAll.filter(it => it.score !== null && it.score >= 3)
+        .filter(it => defectService.getResolvedDefectForItem(inspection.location_id, it)).length;
+      const kpiDur = reportType === "internal" && timing && timing.duration_minutes > 0 ? timingService.formatDuration(timing.duration_minutes) : "—";
+      html += wordKpiTable([
+        { value: `${inspection.score_pct || 0}%`, label: lang === "en" ? "Total Score" : "Pontuação Total" },
+        { value: itemsAll.length, label: lang === "en" ? "Items" : "Itens" },
+        { value: openDefects, label: lang === "en" ? "Open Defects" : "Defeitos Abertos" },
+        { value: kpiDur, label: lang === "en" ? "Duration" : "Duração", small: kpiDur.length > 6 },
+      ]);
+
+      // METADATA
+      html += `<table class="meta-tbl" cellspacing="0" cellpadding="0">
+        <tr><td class="k" style="color:#1E2A3A;font-weight:bold;background:#F8F7F4;">${lang === "en" ? "Client" : "Cliente"}</td><td>${inspection.location_name || "N/A"}</td></tr>
+        <tr><td class="k" style="color:#1E2A3A;font-weight:bold;background:#F8F7F4;">${lang === "en" ? "Date" : "Data"}</td><td>${new Date(inspection.date).toLocaleDateString("pt-PT")}</td></tr>
+        <tr><td class="k" style="color:#1E2A3A;font-weight:bold;background:#F8F7F4;">${lang === "en" ? "Inspector" : "Inspetor"}</td><td>${inspection.inspector_name || "N/A"}</td></tr>
+        <tr><td class="k" style="color:#1E2A3A;font-weight:bold;background:#F8F7F4;">${lang === "en" ? "Report" : "Relatório"}</td><td>${reportType === "client" ? (lang === "en" ? "Client copy (staff photos omitted)" : "Cópia do cliente (omite fotos de pessoal)") : (lang === "en" ? "Internal use" : "Uso interno")}</td></tr>
+        <tr><td class="k" style="color:#1E2A3A;font-weight:bold;background:#F8F7F4;">${lang === "en" ? "Generated" : "Gerado em"}</td><td>${new Date().toLocaleString("pt-PT")}</td></tr>
+      </table>`;
 
       if (sectionScores.length > 0) {
         html += `<h2>📊 ${S.health}</h2><div class="health-scores">`;
@@ -526,36 +575,50 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
           html += `<h2>\u26A0 ${S.defects}</h2>`;
           openItems.forEach(it => {
             const d = defectService.getOpenDefectForItem(inspection.location_id, it);
-            html += `<div style="margin-bottom:12px;padding:10px;border-left:4px solid #A32D2D;background:#FEF2F2;border-radius:4px;">` +
-              `<div style="font-weight:bold;color:#A32D2D;">\u26A0 ${it.label || it.text || "Item"} \u2014 Pontuação: ${it.score}</div>` +
+            html += `<div class="defect">` +
+              `<div class="ttl">\u26A0 ${it.label || it.text || "Item"} \u2014 Pontuação: ${it.score}</div>` +
               `<div style="color:#666;margin-top:4px;">${S.fix}</div>` +
               (d && d.due_at ? `<div style="color:#666;font-size:10pt;margin-top:2px;">Prazo: ${new Date(d.due_at).toLocaleString("pt-PT")}</div>` : "") +
               (d && d.recurrence_count > 1 ? `<div style="color:#A32D2D;font-size:10pt;margin-top:2px;">Recorrência: ${d.recurrence_count}x</div>` : "") +
               `</div>`;
           });
           resolvedItems.forEach(({ it, d }) => {
-            html += `<div style="margin-bottom:12px;padding:10px;border-left:4px solid #0F6E56;background:#ECFDF5;border-radius:4px;">` +
-              `<div style="font-weight:bold;color:#0F6E56;">\u2705 ${it.label || it.text || "Item"} \u2014 RESOLVIDO</div>` +
+            html += `<div class="resolved">` +
+              `<div class="ttl">\u2705 ${it.label || it.text || "Item"} \u2014 ${S.resolved}</div>` +
               (d && d.opened_at ? `<div style="color:#666;margin-top:4px;">Problema desde ${new Date(d.opened_at).toLocaleDateString("pt-PT")}</div>` : "") +
               `</div>`;
           });
         }
       }
 
-      TEMPLATE_SECTIONS.forEach(section => {
+      // Secções: tabela de itens + evidências fotográficas (base64, proporção real)
+      for (const section of TEMPLATE_SECTIONS) {
         const secData = inspection.sections?.find(s => s.id === section.id);
         html += `<h2>${section.name || section.title || "Seção"}</h2>`;
         if (secData?.observation) html += `<div class="obs"><strong>Observação:</strong> ${secData.observation}</div>`;
         const sItems = inspection.items?.filter(i => i.section_id === section.id) || [];
-        sItems.forEach(item => {
-          const colors = ["#A32D2D", "#993C1D", "#BA7517", "#3B6D11", "#0F6E56"];
-          const scoreBg = item.score !== null ? colors[item.score - 1] : "#888";
-          const scoreTxt = item.score !== null ? item.score : "N/A";
-          html += `<div class="item"><strong>${item.label || item.text || "Item"}</strong> <span class="score" style="background:${scoreBg}">${scoreTxt}</span>`;
-          if (item.comment) html += `<div class="cmt">→ ${item.comment}</div>`;
-          if (item.qc_comment) html += `<div class="qc">⚠ QC: ${item.qc_comment}</div>`;
-          html += `</div>`;
-        });
+        if (sItems.length > 0) {
+          html += `<table class="items-tbl" cellspacing="0" cellpadding="0">
+            <tr>
+              <th width="40%" style="background:#1E2A3A;color:#FFFFFF;font-size:9pt;text-transform:uppercase;letter-spacing:1px;padding:6px 8px;text-align:left;">${lang === "en" ? "Item" : "Item"}</th>
+              <th width="12%" align="center" style="background:#1E2A3A;color:#FFFFFF;font-size:9pt;text-transform:uppercase;letter-spacing:1px;padding:6px 8px;text-align:center;">${lang === "en" ? "Score" : "Pont."}</th>
+              <th width="30%" style="background:#1E2A3A;color:#FFFFFF;font-size:9pt;text-transform:uppercase;letter-spacing:1px;padding:6px 8px;text-align:left;">${lang === "en" ? "Observation" : "Observação"}</th>
+              <th width="18%" style="background:#1E2A3A;color:#FFFFFF;font-size:9pt;text-transform:uppercase;letter-spacing:1px;padding:6px 8px;text-align:left;">QC</th>
+            </tr>`;
+          sItems.forEach((item, idx) => {
+            const colors = ["#A32D2D", "#993C1D", "#BA7517", "#3B6D11", "#0F6E56"];
+            const scoreBg = item.score !== null ? colors[item.score - 1] : "#888";
+            const scoreTxt = item.score !== null ? item.score : "N/A";
+            const zebra = idx % 2 === 1 ? "background:#FAFAFA;" : "";
+            html += `<tr>
+              <td style="${zebra}"><strong>${item.label || item.text || "Item"}</strong></td>
+              <td align="center" style="${zebra}"><span class="score-chip" style="background:${scoreBg}">${scoreTxt}</span></td>
+              <td style="${zebra}">${item.comment || "—"}</td>
+              <td style="${zebra}">${item.qc_comment ? `<span class="qc">\u26A0 ${item.qc_comment}</span>` : "—"}</td>
+            </tr>`;
+          });
+          html += `</table>`;
+        }
 
         const secIdStr = String(section.id || "");
         const secNameU = String(section.name || section.title || "").toUpperCase();
@@ -567,18 +630,32 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
           const allPhotos = [...secPhotos, ...itemPhotos];
 
           if (allPhotos.length > 0) {
-            html += `<div class="photo-grid">`;
-            allPhotos.forEach(photo => {
-              html += `<img src="${photo.url}" alt="Evidência" />`;
-            });
-            html += `</div>`;
+            const fittedPhotos = [];
+            const captions = [];
+            for (const photo of allPhotos) {
+              const fp = await fetchFittedPhoto(photo.url, 200, 150);
+              if (fp) { fittedPhotos.push(fp); captions.push(section.name || section.title || "Evidência"); }
+            }
+            if (fittedPhotos.length) html += wordPhotoTable(fittedPhotos, { perRow: 3, boxW: 200, boxH: 150, caption: captions });
           }
         }
-      });
-      html += `<div style="margin-top: 40px; display: flex; justify-content: space-between;">`;
-      if (inspection.inspector_sig) html += `<div><img src="${inspection.inspector_sig}" style="width: 150px; height: 50px;" /><br/><strong>Assinatura do Inspetor</strong></div>`;
-      if (inspection.client_sig) html += `<div><img src="${inspection.client_sig}" style="width: 150px; height: 50px;" /><br/><strong>Assinatura do Cliente</strong></div>`;
-      html += `</div>`;
+      }
+
+      // ASSINATURAS — dimensões calculadas (o Word não suporta object-fit)
+      const fittedSig = async (src) => {
+        if (!src) return null;
+        const size = await getImageSize(src);
+        const d = fitDims(size?.w, size?.h, 150, 50);
+        return { src, ...d };
+      };
+      const sigI = await fittedSig(inspection.inspector_sig);
+      const sigC = await fittedSig(inspection.client_sig);
+      html += `<table class="sig-tbl" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:46px;"><tr>
+        <td width="50%" align="center" style="border-top:2px solid #333333;padding:14px 10px 0 10px;vertical-align:bottom;">${sigI ? `<img src="${sigI.src}" width="${sigI.width}" height="${sigI.height}" />` : ""}<br/><strong>${lang === "en" ? "Inspector Signature" : "Assinatura do Inspetor"}</strong></td>
+        <td width="50%" align="center" style="border-top:2px solid #333333;padding:14px 10px 0 10px;vertical-align:bottom;">${sigC ? `<img src="${sigC.src}" width="${sigC.width}" height="${sigC.height}" />` : ""}<br/><strong>${lang === "en" ? "Client Signature" : "Assinatura do Cliente"}</strong></td>
+      </tr></table>`;
+
+      html += `<div class="footer">${S.footer} — ${new Date().toLocaleString("pt-PT")}</div>`;
       html += `</body></html>`;
 
       const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
@@ -596,6 +673,7 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
       alert("Erro ao gerar Word: " + (error && error.message ? error.message : "tente novamente"));
     }
   };
+
   // Se não houver dados, mostrar loading
   if (!inspection) {
     return (
