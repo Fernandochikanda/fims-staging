@@ -5,6 +5,8 @@ import { Icon } from "../lib/icons";
 import { calcScore, isItemComplete, getCategoryHealth, generateAISummary } from "../lib/helpers";
 import { photoStore } from "../lib/photoStore";
 import { getClientTemplate, getClientTemplateAsync } from "../data/constants";
+import { timingService } from "../services/timingService";
+import { logService } from "../services/logService";
 import SignaturePad from "../components/SignaturePad";
 import PhotoUploader from "../components/PhotoUploader";
 import VoiceInput from "../components/VoiceInput";
