@@ -588,7 +588,7 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
             <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "5px 0", borderBottom: "1px solid #f3f3f3" }}>
               <Icon name="audit" size={12} style={{ color: "#378ADD", marginTop: 1, flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12 }}>{l.action || l.details || l.note || l.type}</div>
+                <div style={{ fontSize: 12 }}>{l.action || l.detail || l.details || l.note || l.type}</div>
                 <div style={{ fontSize: 10, color: "#9CA3AF" }}>{(l.user && (l.user.name || l.user)) || "Sistema"} · {timeAgo(l.timestamp || l.created_at)}</div>
               </div>
             </div>

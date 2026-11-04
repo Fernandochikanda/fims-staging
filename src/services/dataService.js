@@ -133,6 +133,44 @@ export const dataService = {
     } catch (error) { console.error('[dataService] deleteInspection exception:', error); return false; }
   },
 
+  // ============ OUTBOX — gravação garantida mesmo sem rede ============
+  // Se saveInspection falhar (offline/erro de rede), a gravação entra numa
+  // fila local e é reenviada automaticamente: no arranque da app, quando a
+  // ligação recupera e por intervalo. A última versão de cada inspeção ganha.
+  _OUTBOX_KEY: 'fims_outbox',
+  _flushing: false,
+  _readOutbox() {
+    try { return JSON.parse(localStorage.getItem(this._OUTBOX_KEY) || '[]'); } catch { return []; }
+  },
+  _writeOutbox(queue) {
+    try { localStorage.setItem(this._OUTBOX_KEY, JSON.stringify(queue.slice(0, 50))); } catch (e) {}
+  },
+  queueInspectionSave(inspection) {
+    if (!inspection || !inspection.id) return;
+    const queue = this._readOutbox().filter(e => String(e.inspection?.id) !== String(inspection.id));
+    queue.push({ ts: Date.now(), inspection });
+    this._writeOutbox(queue);
+    console.log(`[dataService] Outbox: inspeção ${inspection.id} em fila (${queue.length} pendentes)`);
+  },
+  outboxSize() { return this._readOutbox().length; },
+  async flushOutbox() {
+    if (this._flushing) return 0;
+    const queue = this._readOutbox();
+    if (queue.length === 0) return 0;
+    this._flushing = true;
+    let sent = 0;
+    try {
+      for (const entry of queue) {
+        const ok = await this.saveInspection(entry.inspection);
+        if (!ok) break; // servidor ainda inacessível — manter o resto na fila
+        sent++;
+        this._writeOutbox(this._readOutbox().filter(e => String(e.inspection?.id) !== String(entry.inspection?.id)));
+      }
+      if (sent > 0) console.log(`[dataService] Outbox: ${sent} gravação(ões) reenviada(s), ${this.outboxSize()} em fila`);
+      return sent;
+    } finally { this._flushing = false; }
+  },
+
   async syncInspections(inspections) {
     try {
       if (!inspections || inspections.length === 0) return true;

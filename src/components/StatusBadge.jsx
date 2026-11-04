@@ -1,9 +1,12 @@
 export default function StatusBadge({ status }) {
   const map = {
     pending: { cls: "badge-pending", text: "Pendente" },
+    pending_acceptance: { cls: "badge-pending", text: "Aguarda Aceitação" },
     in_progress: { cls: "badge-progress", text: "Em Progresso" },
     submitted: { cls: "badge-submitted", text: "Submetida" },
     reviewed: { cls: "badge-reviewed", text: "Aprovada" },
+    approved: { cls: "badge-reviewed", text: "Aprovada" },
+    sent_to_client: { cls: "badge-reviewed", text: "Enviado ao Cliente" },
     needs_corrections: { cls: "badge-critical", text: "Rejeitada (Corrigir)" },
     closed: { cls: "badge-closed", text: "Fechada" },
     ok: { cls: "badge-ok", text: "OK" },

@@ -280,17 +280,19 @@ function AppContent() {
     if (!isInitialized || !currentUser) return;
     let unsubscribed = false;
     let cleanupRealtime = null;
+    let cleanupPoll = null;
     async function syncInspections() {
       try {
         const { dataService } = await import('./services/dataService');
-        const result = await dataService.fetchInspections();
-        
-        if (unsubscribed || !result.success) return;
-        
-        console.log(`[App] Recebidas ${result.inspections.length} inspeções do Supabase`);
-        setInspections(result.inspections);
-        dataStore.set(STORAGE_KEYS.INSPECTIONS, result.inspections);
-        
+        const fetchData = async () => {
+          const result = await dataService.fetchInspections();
+          if (unsubscribed || !result.success) return;
+          console.log(`[App] Recebidas ${result.inspections.length} inspeções do Supabase`);
+          setInspections(result.inspections);
+          dataStore.set(STORAGE_KEYS.INSPECTIONS, result.inspections);
+        };
+        await fetchData();
+
         cleanupRealtime = dataService.subscribeToInspectionChanges((payload) => {
           if (unsubscribed) return;
           if (payload.eventType === 'INSERT' && payload.new) {
@@ -320,6 +322,24 @@ function AppContent() {
             });
           }
         });
+
+        // Fallback de fiabilidade: o realtime pode cair (rede/VPN) — refresca
+        // por intervalo, e reenvia gravações em fila (outbox) no arranque,
+        // quando a ligação recupera e a cada minuto.
+        dataService.flushOutbox();
+        const onOnline = () => { dataService.flushOutbox(); };
+        window.addEventListener("online", onOnline);
+        const poll = setInterval(async () => {
+          if (unsubscribed) return;
+          try {
+            await dataService.flushOutbox();
+            await fetchData();
+          } catch (e) { console.warn("[App] Poll falhou:", e?.message); }
+        }, 60000);
+        cleanupPoll = () => {
+          clearInterval(poll);
+          window.removeEventListener("online", onOnline);
+        };
       } catch (error) {
         console.error('[App] Erro na sincronização:', error);
       }
@@ -328,6 +348,7 @@ function AppContent() {
     return () => {
       unsubscribed = true;
       if (cleanupRealtime) cleanupRealtime();
+      if (cleanupPoll) cleanupPoll();
     };
   }, [isInitialized, currentUser]);
 
@@ -527,9 +548,13 @@ function AppContent() {
     setEditingInspection(updated);
     try {
       const { dataService } = await import('./services/dataService');
-      await dataService.saveInspection(updated);
-      console.log("[App] Rascunho e fotos salvos no Supabase.");
-    } catch (error) { console.error("Erro ao salvar rascunho no Supabase:", error); }
+      const ok = await dataService.saveInspection(updated);
+      if (ok) console.log("[App] Rascunho e fotos salvos no Supabase.");
+      else dataService.queueInspectionSave(updated);
+    } catch (error) {
+      console.error("Erro ao salvar rascunho no Supabase:", error);
+      try { const { dataService } = await import('./services/dataService'); dataService.queueInspectionSave(updated); } catch (e2) {}
+    }
   };
   
   const handleSubmitInspection = async (updated) => {
@@ -540,8 +565,15 @@ function AppContent() {
     
     try {
       const { dataService } = await import('./services/dataService');
-      await dataService.saveInspection(updated);
-    } catch (error) { console.error("Erro ao submeter no Supabase:", error); }
+      const ok = await dataService.saveInspection(updated);
+      if (!ok) {
+        dataService.queueInspectionSave(updated);
+        alert("⚠️ A submissão não chegou ao servidor (ligação indisponível).\n\nFicou guardada neste dispositivo e será reenviada automaticamente assim que houver internet.");
+      }
+    } catch (error) {
+      console.error("Erro ao submeter no Supabase:", error);
+      try { const { dataService } = await import('./services/dataService'); dataService.queueInspectionSave(updated); } catch (e2) {}
+    }
     addAuditLog(currentUser, "Inspeção Submetida", "notification", `Supervisor(es) notificado(s) sobre a inspeção em ${updated.location_name}`);
     // ============================================================
     // FIM DE INSPEÇÃO (submissão) → supervisores recebem NOTIFICAÇÃO
@@ -573,8 +605,12 @@ function AppContent() {
       { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "taskacc:" + insp.id });
     try {
       const { dataService } = await import('./services/dataService');
-      await dataService.saveInspection(merged);
-    } catch (error) { console.error("Erro ao salvar aceitação no Supabase:", error); }
+      const ok = await dataService.saveInspection(merged);
+      if (!ok) dataService.queueInspectionSave(merged);
+    } catch (error) {
+      console.error("Erro ao salvar aceitação no Supabase:", error);
+      try { const { dataService } = await import('./services/dataService'); dataService.queueInspectionSave(merged); } catch (e2) {}
+    }
   };
   
   const handleDeclineTask = async (insp) => {
@@ -660,8 +696,15 @@ function AppContent() {
     }
     try {
       const { dataService } = await import('./services/dataService');
-      await dataService.saveInspection(merged);
-    } catch (error) { console.error("Erro ao salvar atualização no Supabase:", error); }
+      const ok = await dataService.saveInspection(merged);
+      if (!ok) {
+        dataService.queueInspectionSave(merged);
+        alert("⚠️ A atualização (aprovação/rejeição) não chegou ao servidor.\n\nFicou em fila e será reenviada automaticamente.");
+      }
+    } catch (error) {
+      console.error("Erro ao salvar atualização no Supabase:", error);
+      try { const { dataService } = await import('./services/dataService'); dataService.queueInspectionSave(merged); } catch (e2) {}
+    }
   };
 
   const handleCreateSchedule = async (tasks) => {

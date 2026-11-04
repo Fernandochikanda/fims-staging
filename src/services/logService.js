@@ -4,8 +4,10 @@ const LOCAL_KEY = 'fims_logs';
 function getLocal() { try { return JSON.parse(localStorage.getItem(LOCAL_KEY) || '[]'); } catch { return []; } }
 function saveLocal(logs) { try { localStorage.setItem(LOCAL_KEY, JSON.stringify(logs.slice(-200))); } catch (e) {} }
 export const logService = {
-  async log(user, action, type, details = '') {
-    const entry = { id: genId(), user_id: String(user?.id || ''), user_name: user?.name || 'Sistema', action, type, details, timestamp: new Date().toISOString() };
+  async log(user, action, type, detail = '') {
+    // A coluna na BD chama-se 'detail' (não 'details') — inserir com o nome
+    // errado falhava em silêncio e a auditoria nunca chegava ao Supabase.
+    const entry = { id: genId(), user_id: String(user?.id || ''), user_name: user?.name || 'Sistema', action, type, detail, timestamp: new Date().toISOString() };
     try { const { error } = await supabase.from('fims_logs').insert([entry]); if (error) throw error; }
     catch (e) { const logs = getLocal(); logs.unshift(entry); saveLocal(logs); }
     return entry;
