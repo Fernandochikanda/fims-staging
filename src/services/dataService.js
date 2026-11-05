@@ -79,17 +79,34 @@ export const dataService = {
     }
   },
 
+  // Último motivo de falha de gravação (para mostrar ao utilizador em vez de
+  // um genérico "ligação indisponível" que esconde a causa real).
+  lastSaveError: '',
+
+  // Gravação com timeout determinístico: com ligação morta/instável (muito
+  // comum em dados móveis), o fetch pode ficar pendurado minutos sem resposta.
+  _NET_TIMEOUT_MS: 25000,
+  _withTimeout(promise, label) {
+    let timer;
+    const timeout = new Promise(resolve => {
+      timer = setTimeout(() => resolve({ error: { message: `${label}: sem resposta do servidor em ${this._NET_TIMEOUT_MS / 1000}s (ligação instável).` } }), this._NET_TIMEOUT_MS);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  },
+
   async saveInspection(inspection) {
+    this.lastSaveError = '';
     try {
       // BUSCAR DADOS EXISTENTES NO BANCO PARA EVITAR SOBRESCREVER ITENS/FOTOS
-      const { data: existingRow } = await supabase
+      const select = supabase
         .from('fims_inspections')
         .select('data')
         .eq('id', String(inspection.id))
         .single();
+      const { data: existingRow } = await this._withTimeout(select, 'Leitura');
 
       const existingData = existingRow?.data || {};
-      
+
       // FUSÃO PROFUNDA: Garantir que não apagamos itens e fotos se a atualização for parcial
       const mergedData = {
         ...existingData,
@@ -99,8 +116,8 @@ export const dataService = {
         photosByItem: (inspection.photosByItem && Object.keys(inspection.photosByItem).length > 0) ? inspection.photosByItem : (existingData.photosByItem || {}),
       };
 
-      const row = { 
-        id: String(inspection.id), 
+      const row = {
+        id: String(inspection.id),
         data: mergedData,  // Guardar os dados fundidos no JSONB
         inspector_id: String(inspection.inspector_id || ''),
         inspector_name: inspection.inspector_name || null,
@@ -110,18 +127,31 @@ export const dataService = {
         location_id: inspection.location_id ? String(inspection.location_id) : null,
         alert_level: inspection.alert_level || 'ok',
         type: inspection.type || 'inspection',
-        updated_at: new Date().toISOString() 
+        updated_at: new Date().toISOString()
       };
-      
-      const { error } = await supabase.from('fims_inspections').upsert(row);
-      if (error) { 
-        console.warn('[dataService] saveInspection error:', error.message); 
-        return false; 
+
+      // JSON seguro: deteta referências circulares/valores não serializáveis
+      // ANTES de chamar o servidor (senão a falha é enigmática).
+      let safeRow;
+      try {
+        safeRow = JSON.parse(JSON.stringify(row));
+      } catch (e) {
+        this.lastSaveError = 'Dados da inspeção não são serializáveis (referência circular?).';
+        console.error('[dataService] saveInspection: payload não serializável:', e);
+        return false;
+      }
+
+      const { error } = await this._withTimeout(supabase.from('fims_inspections').upsert(safeRow), 'Gravação');
+      if (error) {
+        this.lastSaveError = error.message || 'erro desconhecido do servidor';
+        console.warn('[dataService] saveInspection error:', this.lastSaveError);
+        return false;
       }
       return true;
-    } catch (error) { 
-      console.error('[dataService] saveInspection exception:', error); 
-      return false; 
+    } catch (error) {
+      this.lastSaveError = (error && (error.message || error.code)) || String(error);
+      console.error('[dataService] saveInspection exception:', error);
+      return false;
     }
   },
 

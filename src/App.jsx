@@ -565,10 +565,17 @@ function AppContent() {
     
     try {
       const { dataService } = await import('./services/dataService');
-      const ok = await dataService.saveInspection(updated);
+      let ok = await dataService.saveInspection(updated);
+      if (!ok) {
+        // 2ª tentativa após pausa curta — falhas transitórias de rede são comuns
+        await new Promise(r => setTimeout(r, 3000));
+        ok = await dataService.saveInspection(updated);
+      }
       if (!ok) {
         dataService.queueInspectionSave(updated);
-        alert("⚠️ A submissão não chegou ao servidor (ligação indisponível).\n\nFicou guardada neste dispositivo e será reenviada automaticamente assim que houver internet.");
+        const motivo = dataService.lastSaveError || "ligação indisponível";
+        const semNet = typeof navigator !== "undefined" && navigator.onLine === false;
+        alert(`⚠️ A submissão não chegou ao servidor.\nMotivo: ${motivo}\n\n${semNet ? "O aparelho parece estar SEM internet (confirme dados móveis/Wi-Fi).\n\n" : ""}Ficou guardada neste dispositivo e será reenviada automaticamente assim que houver ligação.`);
       }
     } catch (error) {
       console.error("Erro ao submeter no Supabase:", error);
@@ -699,7 +706,7 @@ function AppContent() {
       const ok = await dataService.saveInspection(merged);
       if (!ok) {
         dataService.queueInspectionSave(merged);
-        alert("⚠️ A atualização (aprovação/rejeição) não chegou ao servidor.\n\nFicou em fila e será reenviada automaticamente.");
+        alert(`⚠️ A atualização (aprovação/rejeição) não chegou ao servidor.\nMotivo: ${dataService.lastSaveError || "ligação indisponível"}\n\nFicou em fila e será reenviada automaticamente.`);
       }
     } catch (error) {
       console.error("Erro ao salvar atualização no Supabase:", error);
