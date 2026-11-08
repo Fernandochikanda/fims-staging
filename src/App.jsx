@@ -31,6 +31,9 @@ import { authService } from "./services/authService";
 import { dataStore } from "./lib/dataStore";
 import { defectService } from "./services/defectService";
 import settingsService, { NOTIF_EVENTS } from "./services/settingsService";
+import { INSPECTION_STATUS, validateTransition, canDelete, labelOf } from "./lib/inspectionStates";
+import PromptModal from "./components/PromptModal";
+import { showToast } from "./lib/toast";
 
 // Chaves para localStorage
 const STORAGE_KEYS = {
@@ -204,8 +207,46 @@ function AppContent() {
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [reschedulingTask, setReschedulingTask] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  
+  const [promptModal, setPromptModal] = useState(null);
+
   const [isInitialized, setIsInitialized] = useState(false);
+
+  // ─── PROMPT / CONFIRM HELPERS (replace native prompt() & confirm()) ───
+  // Each returns a Promise: resolves to the input string (prompt) or true/false (confirm).
+  const showPrompt = (opts) =>
+    new Promise((resolve) => {
+      setPromptModal({
+        ...opts,
+        showInput: true,
+        onConfirm: (val) => { setPromptModal(null); resolve(val); },
+        onCancel: () => { setPromptModal(null); resolve(null); },
+      });
+    });
+
+  const showConfirm = (opts) =>
+    new Promise((resolve) => {
+      setPromptModal({
+        ...opts,
+        showInput: false,
+        onConfirm: () => { setPromptModal(null); resolve(true); },
+        onCancel: () => { setPromptModal(null); resolve(false); },
+      });
+    });
+
+  // ─── TRANSITION GUARD ───────────────────────────────────────────
+  // Validates a status transition + logs blocked attempts to the audit log.
+  // Returns true if allowed, false (with toast + audit) if blocked.
+  const guardTransition = (inspection, newStatus, actionLabel) => {
+    const user = currentUser || { id: "system", name: "Sistema" };
+    const result = validateTransition(inspection, newStatus, user);
+    if (!result.ok) {
+      showToast(result.message, "error", 5000);
+      addAuditLog(user, "Transição Bloqueada", "security",
+        `${actionLabel} bloqueada: ${result.message} [${result.code}] — Inspeção ${inspection?.location_name || inspection?.id || "?"}`);
+      return false;
+    }
+    return true;
+  };
 
   // --- CARREGAR DADOS DO INDEXEDDB + localStorage (uma vez) ---
   useEffect(() => {
@@ -515,7 +556,9 @@ function AppContent() {
     let updated = { ...insp };
     let needsSave = false;
     
+    // GUARD: validate transition to in_progress
     if (insp.status === "pending" || insp.status === "needs_corrections") {
+      if (!guardTransition(insp, INSPECTION_STATUS.IN_PROGRESS, "Iniciar inspeção")) return;
       updated.status = "in_progress";
       needsSave = true;
     }
@@ -558,6 +601,9 @@ function AppContent() {
   };
   
   const handleSubmitInspection = async (updated) => {
+    // GUARD: validate transition in_progress → submitted
+    if (!guardTransition(updated, INSPECTION_STATUS.SUBMITTED, "Submeter inspeção")) return;
+
     setInspections(prev => prev.map(i => i.id === updated.id ? updated : i));
     setEditingInspection(null);
     localStorage.removeItem(STORAGE_KEYS.EDITING_INSPECTION);
@@ -602,6 +648,9 @@ function AppContent() {
   };
   
   const handleAcceptTask = async (insp) => {
+    // GUARD: validate transition pending_acceptance → pending
+    if (!guardTransition(insp, INSPECTION_STATUS.PENDING, "Aceitar tarefa")) return;
+
     const existing = inspections.find(i => i.id === insp.id) || {};
     const merged = { ...existing, accepted: true, status: "pending" };
     
@@ -621,9 +670,19 @@ function AppContent() {
   };
   
   const handleDeclineTask = async (insp) => {
-    const reason = prompt("Motivo da recusa:", "");
-    if (reason === null) return;
-    
+    // GUARD: validate transition pending_acceptance → rejected
+    if (!guardTransition(insp, INSPECTION_STATUS.REJECTED, "Recusar tarefa")) return;
+
+    const reason = await showPrompt({
+      title: "Recusar Tarefa",
+      message: `Vai recusar a tarefa para "${insp.location_name}". Indique o motivo da recusa:`,
+      placeholder: "Ex: Conflito de agenda, sem transporte...",
+      confirmLabel: "Recusar",
+      danger: true,
+      requireInput: true,
+    });
+    if (!reason || !reason.trim()) return;
+
     const existing = inspections.find(i => i.id === insp.id) || {};
     const merged = { ...existing, accepted: false, status: "rejected", decline_reason: reason };
     
@@ -639,8 +698,15 @@ function AppContent() {
   };
 
   const handleRequestLeave = async (user) => {
-    const date = prompt("Data da folga (AAAA-MM-DD):", new Date().toISOString().split("T")[0]);
-    if (!date) return;
+    const date = await showPrompt({
+      title: "Pedir Folga",
+      message: `Indique a data da folga para ${user.name}:`,
+      placeholder: "AAAA-MM-DD",
+      defaultValue: new Date().toISOString().split("T")[0],
+      confirmLabel: "Registar Folga",
+      requireInput: true,
+    });
+    if (!date || !date.trim()) return;
     const leaveTask = { id: genId(), inspector_id: user.id, inspector_name: user.name, date, type: "leave", status: "leave" };
     setInspections(prev => [leaveTask, ...prev]);
     addAuditLog(user, "Folga Pedida", "schedule", `Pediu folga para ${date}`);
@@ -655,12 +721,50 @@ function AppContent() {
   };
   
   const handleDelete = async (id) => {
+    const insp = inspections.find(i => i.id === id);
+    if (!insp) return;
+
+    // GUARD: check if user can delete this inspection
+    const guard = canDelete(insp, currentUser);
+    if (!guard.ok) {
+      showToast(guard.message, "error", 5000);
+      addAuditLog(currentUser || { name: "Sistema" }, "Eliminação Bloqueada", "security",
+        `${guard.message} [${guard.code}] — Inspeção ${insp.location_name || id}`);
+      return;
+    }
+
+    // For protected inspections (submitted/reviewed/closed), require admin + reason
+    const isProtected = [INSPECTION_STATUS.SUBMITTED, INSPECTION_STATUS.REVIEWED, INSPECTION_STATUS.CLOSED]
+      .includes(insp.status);
+    let reason = "";
+    if (isProtected) {
+      reason = await showPrompt({
+        title: "Eliminar Inspeção Protegida",
+        message: `Esta inspeção (${insp.location_name}) está no estado "${labelOf(insp.status)}". A eliminação requer um motivo justificado.`,
+        placeholder: "Motivo da eliminação...",
+        confirmLabel: "Eliminar",
+        danger: true,
+        requireInput: true,
+      });
+      if (!reason || !reason.trim()) return;
+    } else {
+      const ok = await showConfirm({
+        title: "Eliminar Inspeção",
+        message: `Tem a certeza que pretende eliminar a inspeção de "${insp.location_name}"?`,
+        confirmLabel: "Eliminar",
+        cancelLabel: "Cancelar",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+
     setInspections(prev => prev.filter(i => i.id !== id));
-    addAuditLog(currentUser, "Excluir", "inspection", `Excluiu a inspeção ID: ${id}`);
+    addAuditLog(currentUser, "Excluir", "inspection",
+      `Eliminou a inspeção ${insp.location_name} (ID: ${id})${reason ? ` — Motivo: ${reason}` : ""}`);
     try {
       const { dataService } = await import('./services/dataService');
       await dataService.deleteInspection(id);
-    } catch (error) { console.error("Erro ao exuir no Supabase:", error); }
+    } catch (error) { console.error("Erro ao excluir no Supabase:", error); }
   };
   
   const handleCreateInspection = async (insp) => {
@@ -687,7 +791,12 @@ function AppContent() {
   const handleUpdateInspection = async (updated) => {
     const existing = inspections.find(i => i.id === updated.id) || {};
     const merged = { ...existing, ...updated };
-    
+
+    // GUARD: validate status transition (for approve / reject / reopen)
+    if (updated.status && updated.status !== existing.status) {
+      if (!guardTransition(existing, updated.status, "Atualizar inspeção")) return;
+    }
+
     setInspections(prev => prev.map(i => i.id === merged.id ? merged : i));
     if (viewingInspection) setViewingInspection(merged);
     
@@ -808,6 +917,12 @@ function AppContent() {
   };
 
   const handleConfirmReschedule = async (updated, notifyClient, notifyInspector) => {
+    // GUARD: reschedule reason is required
+    if (!updated.reschedule_reason || !updated.reschedule_reason.trim()) {
+      showToast("É obrigatório indicar o motivo do reagendamento.", "error", 4000);
+      return;
+    }
+
     const existing = inspections.find(i => i.id === updated.id) || {};
     const merged = { ...existing, ...updated };
     
@@ -1009,6 +1124,21 @@ function AppContent() {
           users={users} 
           onClose={() => setReschedulingTask(null)} 
           onConfirm={handleConfirmReschedule} 
+        />
+      )}
+      {promptModal && (
+        <PromptModal
+          title={promptModal.title}
+          message={promptModal.message}
+          placeholder={promptModal.placeholder}
+          defaultValue={promptModal.defaultValue}
+          confirmLabel={promptModal.confirmLabel || "Confirmar"}
+          cancelLabel={promptModal.cancelLabel || "Cancelar"}
+          danger={promptModal.danger}
+          requireInput={promptModal.requireInput}
+          showInput={promptModal.showInput}
+          onConfirm={promptModal.onConfirm}
+          onCancel={promptModal.onCancel}
         />
       )}
     </div>
