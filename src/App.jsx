@@ -32,7 +32,9 @@ import { dataStore } from "./lib/dataStore";
 import { defectService } from "./services/defectService";
 import settingsService, { NOTIF_EVENTS } from "./services/settingsService";
 import { INSPECTION_STATUS, validateTransition, canDelete, labelOf } from "./lib/inspectionStates";
+import { validateInspectionSubmission, formatValidationErrors } from "./lib/inspectionValidator";
 import PromptModal from "./components/PromptModal";
+import PageErrorBoundary from "./components/PageErrorBoundary";
 import { showToast } from "./lib/toast";
 
 // Chaves para localStorage
@@ -494,15 +496,18 @@ function AppContent() {
   };
 
   const addAuditLog = (user, action, type, detail) => {
-    const logEntry = { id: genId(), timestamp: new Date().toISOString(), user: user.name, action, type, detail };
+    // Null-safe: if user is null (e.g. during logout race condition), log as "Sistema"
+    // instead of crashing on user.name.
+    const safeUser = user || { id: "system", name: "Sistema" };
+    const logEntry = { id: genId(), timestamp: new Date().toISOString(), user: safeUser.name, action, type, detail };
     setAuditLogs(prev => [logEntry, ...prev]);
     // Save to Supabase so all users/devices can see it
     (async () => {
       try {
         const { dataService } = await import('./services/dataService');
         await dataService.saveAuditLog({
-          userId: user.id,
-          userName: user.name,
+          userId: safeUser.id,
+          userName: safeUser.name,
           action,
           type,
           detail
@@ -604,6 +609,18 @@ function AppContent() {
     // GUARD: validate transition in_progress → submitted
     if (!guardTransition(updated, INSPECTION_STATUS.SUBMITTED, "Submeter inspeção")) return;
 
+    // GUARD: validate inspection content (safety net — same checks as the form,
+    // but enforced at the handler level so it can't be bypassed by calling
+    // handleSubmitInspection directly). Closes loophole L6.
+    const validation = validateInspectionSubmission(updated);
+    if (!validation.valid) {
+      const detail = formatValidationErrors(validation.errors);
+      showToast(`Inspeção incompleta: ${validation.summary}`, "error", 6000);
+      addAuditLog(currentUser, "Submissão Bloqueada", "security",
+        `Submissão bloqueada por validação: ${validation.summary} — ${updated.location_name || updated.id}. Detalhes: ${detail.slice(0, 200)}`);
+      return;
+    }
+
     setInspections(prev => prev.map(i => i.id === updated.id ? updated : i));
     setEditingInspection(null);
     localStorage.removeItem(STORAGE_KEYS.EDITING_INSPECTION);
@@ -631,19 +648,25 @@ function AppContent() {
     // ============================================================
     // FIM DE INSPEÇÃO (submissão) → supervisores recebem NOTIFICAÇÃO
     // + MENSAGEM no chat, conforme Configurações → Notificações
+    // Wrapped in try/catch so a notification failure doesn't break the
+    // submit flow (the inspection is already saved at this point).
     // ============================================================
-    await notifyEvent(NOTIF_EVENTS.INSPECTION_SUBMITTED, users,
-      `📋 Nova inspeção submetida por ${currentUser.name} para ${updated.location_name} — aguarda revisão.`,
-      "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "inspsub:" + updated.id });
-    
+    try {
+      await notifyEvent(NOTIF_EVENTS.INSPECTION_SUBMITTED, users,
+        `📋 Nova inspeção submetida por ${currentUser.name} para ${updated.location_name} — aguarda revisão.`,
+        "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "inspsub:" + updated.id });
+    } catch (e) { console.warn('[App] notifyEvent (submitted) failed:', e); }
+
     const lowScoreItems = (updated.items || []).filter(i => i.score !== null && i.score <= 2);
     if (lowScoreItems.length > 0) {
       const capaDeadline = new Date();
       capaDeadline.setHours(capaDeadline.getHours() + 48);
       addAuditLog(currentUser, "CAPA Alert Triggered", "capa_alert", `${lowScoreItems.length} item(s) scored 1-2 at ${updated.location_name}. Corrective action required by ${capaDeadline.toLocaleString("pt-PT")}.`);
       const capaMsg = `⚠️ CAPA ALERT: ${updated.location_name} tem ${lowScoreItems.length} defeito(s) crítico(s) (score 1-2). Correção obrigatória em 48h.`;
-      await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, capaMsg, "inspections", {
-        excludeId: currentUser.id, sender: currentUser, dedupeKey: "capa:" + updated.id });
+      try {
+        await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, capaMsg, "inspections", {
+          excludeId: currentUser.id, sender: currentUser, dedupeKey: "capa:" + updated.id });
+      } catch (e) { console.warn('[App] notifyEvent (CAPA) failed:', e); }
     }
   };
   
@@ -980,6 +1003,10 @@ function AppContent() {
           onDeclineTask={handleDeclineTask}
         />
         <div className="page scrollbar-thin">
+          <PageErrorBoundary
+            key={(editingInspection?.id || '') + (viewingInspection?.id || '') + page}
+            onBack={() => handleNavigate("dashboard")}
+          >
           {editingInspection ? (
             <InspectionForm 
               inspection={editingInspection} 
@@ -1090,6 +1117,7 @@ function AppContent() {
               setInspections={setInspections}
             /> 
           ) : null}
+          </PageErrorBoundary>
         </div>
       </div>
       {showNewModal && (

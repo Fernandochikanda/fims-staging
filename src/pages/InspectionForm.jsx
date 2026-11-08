@@ -1,6 +1,6 @@
 // src/pages/InspectionForm.jsx
 // Substituir o componente inteiro
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Icon } from "../lib/icons";
 import { calcScore, isItemComplete, getCategoryHealth, generateAISummary } from "../lib/helpers";
 import { photoStore } from "../lib/photoStore";
@@ -29,6 +29,7 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   const [gpsCoords, setGpsCoords] = useState(null);
   const [showRefModal, setShowRefModal] = useState(null);
   const [refPhotos, setRefPhotos] = useState([]);
+  const draftOutboxTimer = useRef(null);
 
   // Hidden timing: start when form opens (inspector unaware)
   useEffect(() => {
@@ -137,7 +138,13 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
     }
   }, [sections]);
 
-  // Salvar draft (INCLUI FOTOS)
+  // Salvar draft (INCLUI FOTOS) + queue to outbox (debounced)
+  // The draft is saved to localStorage on every change (fast).
+  // Additionally, after a 2-second debounce, the full inspection is queued
+  // to the dataService outbox with status 'in_progress'. This ensures that
+  // if the user closes the tab while offline, the draft survives and will
+  // be synced to Supabase when the connection returns.
+  // Closes crash-risk C5 (draft autosave lost on tab close).
   useEffect(() => {
     if (items.length > 0 || sections.length > 0) {
       const draftData = { items, sections, notes, clientMgrName, inspectorSig, clientSig, photosByItem };
@@ -146,8 +153,28 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
       } catch (e) {
         console.warn('[InspectionForm] Erro ao salvar draft:', e);
       }
+      // Debounced outbox queue — prevents flooding the outbox on every keystroke.
+      // The outbox deduplicates by inspection.id, so only the last version survives.
+      clearTimeout(draftOutboxTimer.current);
+      draftOutboxTimer.current = setTimeout(() => {
+        const fullInspection = {
+          ...inspection,
+          items,
+          sections,
+          notes,
+          client_mgr_name: clientMgrName,
+          inspector_sig: inspectorSig,
+          client_sig: clientSig,
+          photosByItem,
+          status: 'in_progress',
+        };
+        import('../services/dataService').then(({ dataService }) => {
+          dataService.queueInspectionSave(fullInspection);
+        }).catch(() => {});
+      }, 2000);
     }
-  }, [items, sections, notes, clientMgrName, inspectorSig, clientSig, photosByItem, draftKey]);
+    return () => clearTimeout(draftOutboxTimer.current);
+  }, [items, sections, notes, clientMgrName, inspectorSig, clientSig, photosByItem, draftKey, inspection]);
 
   // GPS
   useEffect(() => {
