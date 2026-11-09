@@ -6,36 +6,52 @@
 // Supervisors/Admins: see all CAPAs, close with note, cancel (admin only).
 // ============================================================================
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Icon } from "../lib/icons";
 import { ROLES } from "../data/constants";
 import { capaService, CAPA_STATUS, CAPA_STATUS_LABELS } from "../services/capaService";
 import { showToast } from "../lib/toast";
 import PromptModal from "../components/PromptModal";
 
+// Single state object — all updates batched into one setState call
+// to prevent rapid re-renders that cause "removeChild" DOM errors.
+const initialState = {
+  capas: [],
+  loading: true,
+  error: null,
+  summary: { open: 0, in_progress: 0, overdue: 0, closed: 0, cancelled: 0, open_or_overdue: 0, total: 0 },
+};
+
 export default function CapaManagement({ currentUser, users }) {
-  const [capas, setCapas] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [summary, setSummary] = useState({ open: 0, in_progress: 0, overdue: 0, closed: 0, open_or_overdue: 0 });
+  const [state, setState] = useState(initialState);
   const [filterStatus, setFilterStatus] = useState("open_or_overdue");
   const [filterInspector, setFilterInspector] = useState("");
-  const [modal, setModal] = useState(null); // { type: 'close'|'cancel'|'evidence', capa }
+  const [modal, setModal] = useState(null);
+
+  // Refs to avoid stale closures and prevent updates after unmount
+  const mountedRef = useRef(true);
+  const fetchIdRef = useRef(0);
 
   const isSupervisorOrAbove = [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR].includes(currentUser.role);
 
-  const loadCapas = useCallback(async () => {
-    setLoading(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  // Single fetch function — no useCallback, just called from effect
+  async function fetchCapas() {
+    const myFetchId = ++fetchIdRef.current;
+    // Set loading state (single update)
+    if (mountedRef.current) {
+      setState((prev) => ({ ...prev, loading: true, error: null }));
+    }
+
     try {
-      // Auto-mark overdue first
-      await capaService.markOverdue();
+      // Auto-mark overdue (best-effort, ignore errors if table doesn't exist)
+      await capaService.markOverdue().catch(() => {});
 
-      // Fetch summary
-      const sumRes = await capaService.getSummary(
-        isSupervisorOrAbove ? null : currentUser.id
-      );
-      if (sumRes.success) setSummary(sumRes.summary);
-
-      // Fetch list with filters
+      // Build filters
       const filters = { limit: 500 };
       if (filterStatus !== "all" && filterStatus !== "open_or_overdue") {
         filters.status = filterStatus;
@@ -46,30 +62,55 @@ export default function CapaManagement({ currentUser, users }) {
         filters.assignedTo = filterInspector;
       }
 
-      const res = await capaService.fetchCapas(filters);
-      let list = res.capas || [];
+      // Fetch summary + list in parallel
+      const [sumRes, listRes] = await Promise.all([
+        capaService.getSummary(isSupervisorOrAbove ? null : currentUser.id),
+        capaService.fetchCapas(filters),
+      ]);
 
-      // Client-side filter for "open_or_overdue" (includes open + overdue + in_progress)
+      // Ignore if a newer fetch has started
+      if (myFetchId !== fetchIdRef.current || !mountedRef.current) return;
+
+      let list = listRes.capas || [];
+
+      // Client-side filter for "open_or_overdue"
       if (filterStatus === "open_or_overdue") {
         list = list.filter(
-          (c) => c.status === CAPA_STATUS.OPEN || c.status === CAPA_STATUS.OVERDUE || c.status === CAPA_STATUS.IN_PROGRESS
+          (c) =>
+            c.status === CAPA_STATUS.OPEN ||
+            c.status === CAPA_STATUS.OVERDUE ||
+            c.status === CAPA_STATUS.IN_PROGRESS
         );
       }
 
-      setCapas(list);
+      // SINGLE batched state update — prevents rapid re-renders
+      setState({
+        capas: list,
+        loading: false,
+        error: null,
+        summary: sumRes.success ? sumRes.summary : initialState.summary,
+      });
     } catch (e) {
-      console.error("[CapaManagement] load error:", e);
-      showToast("Erro ao carregar CAPAs.", "error");
-    } finally {
-      setLoading(false);
+      console.error("[CapaManagement] fetch error:", e);
+      if (myFetchId === fetchIdRef.current && mountedRef.current) {
+        setState({
+          capas: [],
+          loading: false,
+          error: e.message || "Erro ao carregar CAPAs",
+          summary: initialState.summary,
+        });
+        showToast("Erro ao carregar CAPAs.", "error");
+      }
     }
-  }, [currentUser, isSupervisorOrAbove, filterStatus, filterInspector]);
+  }
 
+  // Re-fetch when filters change
   useEffect(() => {
-    loadCapas();
-  }, [loadCapas]);
+    fetchCapas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterStatus, filterInspector, currentUser.id, isSupervisorOrAbove]);
 
-  const handleAction = async (type, capa) => {
+  const handleAction = (type, capa) => {
     setModal({ type, capa });
   };
 
@@ -111,14 +152,13 @@ export default function CapaManagement({ currentUser, users }) {
           addAuditLogSafe("CAPA Em Curso", `Adicionou evidência à CAPA para ${capa.item_label} em ${capa.location_name}.`);
         }
       }
-      loadCapas(); // refresh
+      fetchCapas(); // refresh
     } catch (e) {
       console.error("[CapaManagement] action error:", e);
       showToast("Erro ao processar ação.", "error");
     }
   };
 
-  // Best-effort audit log (writes to localStorage; Supabase save is async)
   const addAuditLogSafe = (action, detail) => {
     try {
       const entry = {
@@ -151,13 +191,121 @@ export default function CapaManagement({ currentUser, users }) {
   };
 
   const summaryCards = [
-    { key: "open_or_overdue", label: "Abertas + Atrasadas", count: summary.open_or_overdue || 0, color: "#EF9F27", icon: "alert" },
-    { key: "open", label: "Abertas", count: summary.open || 0, color: "#BA7517", icon: "bell" },
-    { key: "in_progress", label: "Em Curso", count: summary.in_progress || 0, color: "#378ADD", icon: "edit" },
-    { key: "overdue", label: "Atrasadas", count: summary.overdue || 0, color: "#A32D2D", icon: "alert" },
-    { key: "closed", label: "Fechadas", count: summary.closed || 0, color: "#0F6E56", icon: "check" },
-    { key: "all", label: "Todas", count: (summary.total || 0), color: "#6B7280", icon: "clipboard" },
+    { key: "open_or_overdue", label: "Abertas + Atrasadas", count: state.summary.open_or_overdue || 0, color: "#EF9F27", icon: "alert" },
+    { key: "open", label: "Abertas", count: state.summary.open || 0, color: "#BA7517", icon: "bell" },
+    { key: "in_progress", label: "Em Curso", count: state.summary.in_progress || 0, color: "#378ADD", icon: "edit" },
+    { key: "overdue", label: "Atrasadas", count: state.summary.overdue || 0, color: "#A32D2D", icon: "alert" },
+    { key: "closed", label: "Fechadas", count: state.summary.closed || 0, color: "#0F6E56", icon: "check" },
+    { key: "all", label: "Todas", count: state.summary.total || 0, color: "#6B7280", icon: "clipboard" },
   ];
+
+  // Stable content rendering — always wraps content in the same container
+  // to prevent DOM structure changes between loading/loaded states
+  let content;
+  if (state.loading) {
+    content = (
+      <div style={{ textAlign: "center", padding: 40, color: "#6B7280" }}>
+        <div className="spinner" style={{ margin: "0 auto 12px" }}></div>
+        A carregar CAPAs...
+      </div>
+    );
+  } else if (state.error) {
+    content = (
+      <div style={{ textAlign: "center", padding: 40, color: "#A32D2D" }}>
+        <Icon name="alert" size={32} style={{ color: "#A32D2D", marginBottom: 8 }} />
+        <p style={{ fontSize: 14 }}>Erro: {state.error}</p>
+        <button className="btn btn-secondary btn-sm" onClick={fetchCapas} style={{ marginTop: 12 }}>
+          Tentar novamente
+        </button>
+      </div>
+    );
+  } else if (state.capas.length === 0) {
+    content = (
+      <div style={{ textAlign: "center", padding: 40, color: "#6B7280" }}>
+        <Icon name="check" size={32} style={{ color: "#0F6E56", marginBottom: 8 }} />
+        <p style={{ fontSize: 14 }}>Nenhuma CAPA encontrada para este filtro.</p>
+      </div>
+    );
+  } else {
+    content = (
+      <div style={{ background: "#fff", borderRadius: 8, border: "1px solid #E5E7EB", overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "#F9FAFB", borderBottom: "1px solid #E5E7EB" }}>
+              <th style={thStyle}>Localização</th>
+              <th style={thStyle}>Item (Defeito)</th>
+              <th style={thStyle}>Secção</th>
+              <th style={thStyle}>Inspetor</th>
+              <th style={thStyle}>Prazo</th>
+              <th style={thStyle}>Estado</th>
+              <th style={thStyle}>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {state.capas.map((capa) => {
+              const overdue = isOverdue(capa);
+              const statusLabel = CAPA_STATUS_LABELS[capa.status] || { label: capa.status, color: "#888", cls: "badge-pending" };
+              return (
+                <tr key={capa.id} style={{ borderBottom: "1px solid #F3F4F6" }}>
+                  <td style={tdStyle}>
+                    <div style={{ fontWeight: 500, fontSize: 13 }}>{capa.location_name || "—"}</div>
+                    <div style={{ fontSize: 11, color: "#9CA3AF" }}>{String(capa.inspection_id || "").slice(0, 12)}</div>
+                  </td>
+                  <td style={tdStyle}>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>{capa.item_label || "—"}</div>
+                    {capa.evidence_note ? (
+                      <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>
+                        <Icon name="file" size={10} /> {capa.evidence_note.slice(0, 50)}
+                        {capa.evidence_note.length > 50 ? "..." : ""}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td style={tdStyle}>{capa.section_name || "—"}</td>
+                  <td style={tdStyle}>{capa.assigned_name || "—"}</td>
+                  <td style={tdStyle}>
+                    <div style={{ color: overdue ? "#A32D2D" : "#374151", fontWeight: overdue ? 600 : 400, fontSize: 12 }}>
+                      {formatDate(capa.due_at)}
+                    </div>
+                    {overdue ? <div style={{ fontSize: 10, color: "#A32D2D", fontWeight: 600 }}>ATRASADA</div> : null}
+                  </td>
+                  <td style={tdStyle}>
+                    <span className={`badge ${statusLabel.cls}`}>{statusLabel.label}</span>
+                  </td>
+                  <td style={tdStyle}>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {(capa.status === CAPA_STATUS.OPEN || capa.status === CAPA_STATUS.OVERDUE) &&
+                      String(capa.assigned_to) === String(currentUser.id) ? (
+                        <button className="btn btn-secondary btn-sm" onClick={() => handleAction("evidence", capa)} title="Adicionar evidência">
+                          <Icon name="camera" size={12} /> Evidência
+                        </button>
+                      ) : null}
+                      {isSupervisorOrAhead &&
+                      [CAPA_STATUS.OPEN, CAPA_STATUS.IN_PROGRESS, CAPA_STATUS.OVERDUE].includes(capa.status) ? (
+                        <button className="btn btn-sm" onClick={() => handleAction("close", capa)} style={{ background: "#0F6E56", color: "#fff" }} title="Fechar CAPA">
+                          <Icon name="check" size={12} /> Fechar
+                        </button>
+                      ) : null}
+                      {currentUser.role === ROLES.ADMIN &&
+                      [CAPA_STATUS.OPEN, CAPA_STATUS.IN_PROGRESS, CAPA_STATUS.OVERDUE].includes(capa.status) ? (
+                        <button className="btn btn-sm" onClick={() => handleAction("cancel", capa)} style={{ background: "#A32D2D", color: "#fff" }} title="Cancelar CAPA (falso positivo)">
+                          <Icon name="x" size={12} />
+                        </button>
+                      ) : null}
+                      {capa.status === CAPA_STATUS.CLOSED ? (
+                        <span style={{ fontSize: 11, color: "#6B7280" }}>
+                          {capa.closed_by_name || "—"} • {formatDate(capa.closed_at)}
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -187,12 +335,7 @@ export default function CapaManagement({ currentUser, users }) {
 
       {/* Filters */}
       <div style={{ display: "flex", gap: 12, marginBottom: 16, alignItems: "center" }}>
-        <select
-          className="form-select"
-          value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
-          style={{ width: "auto" }}
-        >
+        <select className="form-select" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={{ width: "auto" }}>
           <option value="open_or_overdue">Abertas + Atrasadas</option>
           <option value="all">Todas</option>
           <option value="open">Abertas</option>
@@ -201,134 +344,26 @@ export default function CapaManagement({ currentUser, users }) {
           <option value="closed">Fechadas</option>
           <option value="cancelled">Canceladas</option>
         </select>
-        {isSupervisorOrAbove && (
-          <select
-            className="form-select"
-            value={filterInspector}
-            onChange={(e) => setFilterInspector(e.target.value)}
-            style={{ width: "auto" }}
-          >
+        {isSupervisorOrAbove ? (
+          <select className="form-select" value={filterInspector} onChange={(e) => setFilterInspector(e.target.value)} style={{ width: "auto" }}>
             <option value="">Todos os inspetores</option>
             {users.filter((u) => u.role === ROLES.INSPECTOR).map((u) => (
               <option key={u.id} value={u.id}>{u.name}</option>
             ))}
           </select>
-        )}
-        <button className="btn btn-secondary btn-sm" onClick={loadCapas} disabled={loading}>
-          <Icon name="cloud" size={13} /> {loading ? "A carregar..." : "Atualizar"}
+        ) : null}
+        <button className="btn btn-secondary btn-sm" onClick={fetchCapas} disabled={state.loading}>
+          <Icon name="cloud" size={13} /> {state.loading ? "A carregar..." : "Atualizar"}
         </button>
       </div>
 
-      {/* CAPA list */}
-      {loading ? (
-        <div style={{ textAlign: "center", padding: 40, color: "#6B7280" }}>
-          <div className="spinner" style={{ margin: "0 auto 12px" }}></div>
-          A carregar CAPAs...
-        </div>
-      ) : capas.length === 0 ? (
-        <div style={{ textAlign: "center", padding: 40, color: "#6B7280" }}>
-          <Icon name="check" size={32} style={{ color: "#0F6E56", marginBottom: 8 }} />
-          <p style={{ fontSize: 14 }}>Nenhuma CAPA encontrada para este filtro.</p>
-        </div>
-      ) : (
-        <div style={{ background: "#fff", borderRadius: 8, border: "1px solid #E5E7EB", overflow: "hidden" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ background: "#F9FAFB", borderBottom: "1px solid #E5E7EB" }}>
-                <th style={thStyle}>Localização</th>
-                <th style={thStyle}>Item (Defeito)</th>
-                <th style={thStyle}>Secção</th>
-                <th style={thStyle}>Inspetor</th>
-                <th style={thStyle}>Prazo</th>
-                <th style={thStyle}>Estado</th>
-                <th style={thStyle}>Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {capas.map((capa) => {
-                const overdue = isOverdue(capa);
-                const statusLabel = CAPA_STATUS_LABELS[capa.status] || { label: capa.status, color: "#888", cls: "badge-pending" };
-                return (
-                  <tr key={capa.id} style={{ borderBottom: "1px solid #F3F4F6" }}>
-                    <td style={tdStyle}>
-                      <div style={{ fontWeight: 500, fontSize: 13 }}>{capa.location_name || "—"}</div>
-                      <div style={{ fontSize: 11, color: "#9CA3AF" }}>{capa.inspection_id?.slice(0, 12)}</div>
-                    </td>
-                    <td style={tdStyle}>
-                      <div style={{ fontSize: 13, fontWeight: 500 }}>{capa.item_label || "—"}</div>
-                      {capa.evidence_note && (
-                        <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>
-                          <Icon name="file" size={10} /> {capa.evidence_note.slice(0, 50)}
-                          {capa.evidence_note.length > 50 ? "..." : ""}
-                        </div>
-                      )}
-                    </td>
-                    <td style={tdStyle}>{capa.section_name || "—"}</td>
-                    <td style={tdStyle}>{capa.assigned_name || "—"}</td>
-                    <td style={tdStyle}>
-                      <div style={{ color: overdue ? "#A32D2D" : "#374151", fontWeight: overdue ? 600 : 400, fontSize: 12 }}>
-                        {formatDate(capa.due_at)}
-                      </div>
-                      {overdue && <div style={{ fontSize: 10, color: "#A32D2D", fontWeight: 600 }}>ATRASADA</div>}
-                    </td>
-                    <td style={tdStyle}>
-                      <span className={`badge ${statusLabel.cls}`}>{statusLabel.label}</span>
-                    </td>
-                    <td style={tdStyle}>
-                      <div style={{ display: "flex", gap: 4 }}>
-                        {/* Inspector: add evidence (if open/overdue) */}
-                        {(capa.status === CAPA_STATUS.OPEN || capa.status === CAPA_STATUS.OVERDUE) &&
-                          String(capa.assigned_to) === String(currentUser.id) && (
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => handleAction("evidence", capa)}
-                              title="Adicionar evidência"
-                            >
-                              <Icon name="camera" size={12} /> Evidência
-                            </button>
-                          )}
-                        {/* Supervisor+: close (if open/in_progress/overdue) */}
-                        {isSupervisorOrAbove &&
-                          [CAPA_STATUS.OPEN, CAPA_STATUS.IN_PROGRESS, CAPA_STATUS.OVERDUE].includes(capa.status) && (
-                            <button
-                              className="btn btn-sm"
-                              onClick={() => handleAction("close", capa)}
-                              style={{ background: "#0F6E56", color: "#fff" }}
-                              title="Fechar CAPA"
-                            >
-                              <Icon name="check" size={12} /> Fechar
-                            </button>
-                          )}
-                        {/* Admin: cancel */}
-                        {currentUser.role === ROLES.ADMIN &&
-                          [CAPA_STATUS.OPEN, CAPA_STATUS.IN_PROGRESS, CAPA_STATUS.OVERDUE].includes(capa.status) && (
-                            <button
-                              className="btn btn-sm"
-                              onClick={() => handleAction("cancel", capa)}
-                              style={{ background: "#A32D2D", color: "#fff" }}
-                              title="Cancelar CAPA (falso positivo)"
-                            >
-                              <Icon name="x" size={12} />
-                            </button>
-                          )}
-                        {/* If closed: show who closed */}
-                        {capa.status === CAPA_STATUS.CLOSED && (
-                          <span style={{ fontSize: 11, color: "#6B7280" }}>
-                            {capa.closed_by_name || "—"} • {formatDate(capa.closed_at)}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* Content — always wrapped in a stable div to prevent DOM reconciliation issues */}
+      <div style={{ minHeight: 200 }}>
+        {content}
+      </div>
 
-      {/* Modal for close/cancel/evidence */}
-      {modal && (
+      {/* Modal */}
+      {modal ? (
         <PromptModal
           title={
             modal.type === "close" ? "Fechar CAPA" :
@@ -357,7 +392,7 @@ export default function CapaManagement({ currentUser, users }) {
           onConfirm={onModalConfirm}
           onCancel={() => setModal(null)}
         />
-      )}
+      ) : null}
     </div>
   );
 }
