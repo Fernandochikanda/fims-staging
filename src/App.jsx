@@ -686,6 +686,20 @@ function AppContent() {
             await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, capaMsg, `inspections:${updated.id}`, {
               excludeId: currentUser.id, sender: currentUser, dedupeKey: "capa:" + updated.id });
           } catch (e) { console.warn('[App] notifyEvent (CAPA) failed:', e); }
+
+          // ALSO notify the inspector directly — they need to know THEY have
+          // corrective actions to address. The excludeId above skips them
+          // (they're the currentUser submitting), so this separate call
+          // targets them specifically with a tailored message + deep-link
+          // to the CAPA page.
+          if (updated.inspector_id) {
+            try {
+              const inspectorMsg = `📋 Você tem ${result.created} ação(ões) corretiva(s) pendente(s) de ${updated.location_name}. Prazo: 48h (${dueLabel}). Verifique a página CAPA.`;
+              await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, inspectorMsg, "capa", {
+                sender: currentUser, dedupeKey: "capa_insp:" + updated.id,
+                singleUser: String(updated.inspector_id) });
+            } catch (e) { console.warn('[App] notifyEvent (CAPA to inspector) failed:', e); }
+          }
         }
       } catch (e) {
         console.warn('[App] CAPA generation failed:', e);
