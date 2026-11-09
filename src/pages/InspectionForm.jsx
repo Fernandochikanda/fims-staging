@@ -32,6 +32,8 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   const [showRefModal, setShowRefModal] = useState(null);
   const [refPhotos, setRefPhotos] = useState([]);
   const [concurrentEditor, setConcurrentEditor] = useState(false);
+  const [gpsError, setGpsError] = useState(false);
+  const [autosaveStatus, setAutosaveStatus] = useState("idle"); // idle | saving | saved | queued | error
   const draftOutboxTimer = useRef(null);
   const pendingPhotos = useRef([]);
 
@@ -211,6 +213,7 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
           status: 'in_progress',
         };
         const isOnline = typeof navigator !== 'undefined' && navigator.onLine !== false;
+        setAutosaveStatus(isOnline ? "saving" : "queued");
         import('../services/dataService').then(({ dataService }) => {
           if (isOnline) {
             // Online: save directly. saveInspection clears the outbox on success.
@@ -218,15 +221,21 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
               if (!ok) {
                 // Save failed (network error) — queue to outbox as fallback
                 dataService.queueInspectionSave(fullInspection);
+                setAutosaveStatus("queued");
+              } else {
+                setAutosaveStatus("saved");
+                setTimeout(() => setAutosaveStatus("idle"), 2000);
               }
             }).catch(() => {
               dataService.queueInspectionSave(fullInspection);
+              setAutosaveStatus("error");
             });
           } else {
             // Offline: queue to outbox for later flush
             dataService.queueInspectionSave(fullInspection);
+            setAutosaveStatus("queued");
           }
-        }).catch(() => {});
+        }).catch(() => { setAutosaveStatus("error"); });
       }, 2000);
     }
     return () => clearTimeout(draftOutboxTimer.current);
@@ -236,8 +245,8 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   useEffect(() => {
     if (!gpsCoords && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (pos) => setGpsCoords(`${pos.coords.latitude.toFixed(5)},${pos.coords.longitude.toFixed(5)}`),
-        (err) => console.warn("GPS Error:", err.message),
+        (pos) => { setGpsCoords(`${pos.coords.latitude.toFixed(5)},${pos.coords.longitude.toFixed(5)}`); setGpsError(false); },
+        (err) => { console.warn("GPS Error:", err.message); setGpsError(true); },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
     }
@@ -504,8 +513,8 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
         </div>
         <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
           <div style={{ textAlign: 'right', fontSize: 12 }}>
-            <div style={{ color: gpsCoords ? "#0F6E56" : "#888", fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-              <Icon name="location" size={12} /> {gpsCoords ? "GPS Captured" : "Requesting GPS..."}
+            <div style={{ color: gpsCoords ? "#0F6E56" : gpsError ? "#A32D2D" : "#888", fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+              <Icon name="location" size={12} /> {gpsCoords ? "GPS Captured" : gpsError ? "GPS indisponível" : "A obter GPS..."}
             </div>
             {gpsCoords && <a href={`https://maps.google.com/?q=${gpsCoords}`} target="_blank" rel="noreferrer" style={{ color: "#378ADD", fontSize: 10 }}>{gpsCoords}</a>}
           </div>
@@ -750,6 +759,19 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
       </div>
 
       <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", alignItems: "center" }}>
+        {/* Autosave status badge */}
+        {autosaveStatus !== "idle" && (
+          <span style={{
+            fontSize: 11,
+            fontWeight: 500,
+            padding: "3px 10px",
+            borderRadius: 12,
+            color: autosaveStatus === "saved" ? "#0F6E56" : autosaveStatus === "saving" ? "#378ADD" : autosaveStatus === "queued" ? "#EF9F27" : "#A32D2D",
+            background: autosaveStatus === "saved" ? "#ECFDF5" : autosaveStatus === "saving" ? "#EFF6FF" : autosaveStatus === "queued" ? "#FFFBEB" : "#FEF2F2",
+          }}>
+            {autosaveStatus === "saved" ? "✓ Guardado" : autosaveStatus === "saving" ? "A guardar..." : autosaveStatus === "queued" ? "Offline — em fila" : "Erro ao guardar"}
+          </span>
+        )}
         <button className="btn btn-secondary" onClick={handleSave}>{saved ? <><Icon name="check" size={13} />Guardado!</> : "Guardar Rascunho"}</button>
         <button className="btn btn-primary" onClick={handleSubmit} disabled={totalComplete === 0}><Icon name="check" size={13} />Submeter Inspeção</button>
       </div>

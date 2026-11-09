@@ -336,7 +336,9 @@ export function InspectorDashboard({ inspections, users, currentUser, onStartIns
 
   const pendingAcceptance = myInsp.filter(i => i.status === "pending_acceptance");
   const assigned = myInsp.filter(i => i.status === "pending");
-  const drafts = myInsp.filter(i => i.status === "in_progress" || i.status === "needs_corrections");
+  const inProgressDrafts = myInsp.filter(i => i.status === "in_progress");
+  const returnedDrafts = myInsp.filter(i => i.status === "needs_corrections");
+  const drafts = [...returnedDrafts, ...inProgressDrafts]; // keep for metric count
   const recent = myInsp.filter(i => ["submitted", "reviewed", "closed"].includes(i.status));
   const today = new Date().toISOString().split("T")[0];
   const completedToday = recent.filter(i => i.date === today).length;
@@ -437,12 +439,42 @@ export function InspectorDashboard({ inspections, users, currentUser, onStartIns
             </div>
           )}
 
-          <div className="card">
-            <h3 style={{ marginBottom: 12, fontSize: 15 }}>{t.drafts}</h3>
-            {drafts.length === 0 ? (
-              <div style={{ color: "#888", fontSize: 13, padding: 16, textAlign: "center" }}>{t.no_drafts}</div>
-            ) : (
-              drafts.map(insp => (
+          {returnedDrafts.length > 0 && (
+            <div className="card" style={{ marginBottom: 16, borderLeft: "4px solid #A32D2D", background: "#FEF2F2" }}>
+              <h3 style={{ marginBottom: 4, fontSize: 15, color: "#A32D2D", display: "flex", alignItems: "center", gap: 6 }}>
+                ⚠️ Correções Pendentes ({returnedDrafts.length})
+              </h3>
+              <p style={{ fontSize: 12, color: "#991B1B", marginBottom: 12 }}>O supervisor devolveu estas inspeções para correção. Veja as notas em cada inspeção.</p>
+              {returnedDrafts.map(insp => {
+                // Extract the correction note from the notes field
+                const notesStr = String(insp.notes || "");
+                const marker = "[NECESSITA CORREÇÃO]";
+                const markerIdx = notesStr.indexOf(marker);
+                const correctionNote = markerIdx >= 0
+                  ? notesStr.slice(markerIdx + marker.length).replace(/^[:\s]+/, "").trim().slice(0, 100)
+                  : "";
+                return (
+                  <div key={insp.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #FECACA" }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 500, fontSize: 14 }}>{insp.location_name}</div>
+                      <div style={{ color: "#888", fontSize: 12 }}>{insp.date}</div>
+                      {correctionNote && (
+                        <div style={{ fontSize: 12, color: "#991B1B", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          ⚠️ {correctionNote}{correctionNote.length >= 100 ? "..." : ""}
+                        </div>
+                      )}
+                    </div>
+                    <button className="btn btn-primary btn-sm" onClick={() => onStartInspection(insp)} style={{ marginLeft: 8, whiteSpace: "nowrap" }}>Corrigir</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {inProgressDrafts.length > 0 && (
+            <div className="card" style={{ marginBottom: 16 }}>
+              <h3 style={{ marginBottom: 12, fontSize: 15 }}>{t.drafts}</h3>
+              {inProgressDrafts.map(insp => (
                 <div key={insp.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #eee" }}>
                   <div>
                     <div style={{ fontWeight: 500, fontSize: 14 }}>{insp.location_name}</div>
@@ -450,9 +482,9 @@ export function InspectorDashboard({ inspections, users, currentUser, onStartIns
                   </div>
                   <button className="btn btn-secondary btn-sm" onClick={() => onStartInspection(insp)}>{t.continue}</button>
                 </div>
-              ))
-            )}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="card">
