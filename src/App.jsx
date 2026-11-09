@@ -648,9 +648,9 @@ function AppContent() {
         const semNet = typeof navigator !== "undefined" && navigator.onLine === false;
         showToast(`A submissão não chegou ao servidor. Motivo: ${motivo}. ${semNet ? "Aparelho sem internet." : ""} Ficou em fila e será reenviada.`, "warning", 6000);
       } else {
-        // Save succeeded — clear the local draft (the form no longer deletes it
-        // so the handler can block before the draft is lost).
+        // Save succeeded — clear the local draft + confirm to the inspector.
         try { localStorage.removeItem('fims_draft_' + updated.id); } catch (e) {}
+        showToast("Inspeção submetida. Supervisor notificado.", "success", 4000);
       }
     } catch (error) {
       console.error("Erro ao submeter no Supabase:", error);
@@ -722,7 +722,12 @@ function AppContent() {
     try {
       const { dataService } = await import('./services/dataService');
       const ok = await dataService.saveInspection(merged);
-      if (!ok) dataService.queueInspectionSave(merged);
+      if (!ok) {
+        dataService.queueInspectionSave(merged);
+        showToast("Aceitação ficou em fila (sem ligação). Será reenviada automaticamente.", "warning", 5000);
+      } else {
+        showToast("Tarefa aceite.", "success", 3000);
+      }
     } catch (error) {
       console.error("Erro ao salvar aceitação no Supabase:", error);
       try { const { dataService } = await import('./services/dataService'); dataService.queueInspectionSave(merged); } catch (e2) {}
