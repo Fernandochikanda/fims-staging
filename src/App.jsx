@@ -1134,7 +1134,6 @@ function AppContent() {
         />
         <div className="page scrollbar-thin">
           <PageErrorBoundary
-            key={(editingInspection?.id || '') + (viewingInspection?.id || '') + page}
             onBack={() => handleNavigate("dashboard")}
           >
           {editingInspection ? (
