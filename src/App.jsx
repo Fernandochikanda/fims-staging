@@ -670,14 +670,28 @@ function AppContent() {
 
     const lowScoreItems = (updated.items || []).filter(i => i.score !== null && i.score <= 2);
     if (lowScoreItems.length > 0) {
-      const capaDeadline = new Date();
-      capaDeadline.setHours(capaDeadline.getHours() + 48);
-      addAuditLog(currentUser, "CAPA Alert Triggered", "capa_alert", `${lowScoreItems.length} item(s) scored 1-2 at ${updated.location_name}. Corrective action required by ${capaDeadline.toLocaleString("pt-PT")}.`);
-      const capaMsg = `⚠️ CAPA ALERT: ${updated.location_name} tem ${lowScoreItems.length} defeito(s) crítico(s) (score 1-2). Correção obrigatória em 48h.`;
+      // Generate tracked CAPA rows (replaces ad-hoc audit log + chat message).
+      // The CAPAs are persisted in fims_capa with status, deadline, evidence,
+      // and closure tracking. Idempotent: won't duplicate if resubmitted.
       try {
-        await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, capaMsg, "inspections", {
-          excludeId: currentUser.id, sender: currentUser, dedupeKey: "capa:" + updated.id });
-      } catch (e) { console.warn('[App] notifyEvent (CAPA) failed:', e); }
+        const { capaService } = await import('./services/capaService');
+        const result = await capaService.generateForInspection(updated, currentUser);
+        if (result.created > 0) {
+          const dueLabel = new Date(Date.now() + 48 * 3600 * 1000).toLocaleString("pt-PT");
+          addAuditLog(currentUser, "CAPA Gerada", "capa_alert",
+            `${result.created} CAPA(s) gerada(s) para ${updated.location_name} — ${lowScoreItems.length} defeito(s) crítico(s) (score 1-2). Prazo: ${dueLabel}.`);
+          const capaMsg = `⚠️ CAPA: ${updated.location_name} tem ${result.created} defeito(s) crítico(s) (score 1-2). Correção obrigatória em 48h. Verifique a página CAPA.`;
+          try {
+            await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, capaMsg, "inspections", {
+              excludeId: currentUser.id, sender: currentUser, dedupeKey: "capa:" + updated.id });
+          } catch (e) { console.warn('[App] notifyEvent (CAPA) failed:', e); }
+        }
+      } catch (e) {
+        console.warn('[App] CAPA generation failed:', e);
+        // Fallback to old behavior if capaService fails (e.g. table doesn't exist yet)
+        addAuditLog(currentUser, "CAPA Alert (fallback)", "capa_alert",
+          `${lowScoreItems.length} item(s) scored 1-2 at ${updated.location_name}. (CAPA table not available — using audit log fallback.)`);
+      }
     }
   };
   
