@@ -1,5 +1,5 @@
 // /src/App.jsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Icon } from "./lib/icons";
 import Sidebar from "./components/Sidebar";
 import Topbar from "./components/Topbar";
@@ -1021,6 +1021,24 @@ function AppContent() {
 
   if (!currentUser) return <Login onLogin={handleLogin} />;
 
+  // ─── RBAC: filter inspections by role ──────────────────────────
+  // Inspectors see ONLY their own inspections (excluding leave/deleted).
+  // Supervisors/Admins/CEOs see ALL inspections (excluding leave/deleted).
+  // This is applied to ALL pages that receive inspections as a prop —
+  // defense in depth so privacy is enforced even if sidebar permissions
+  // change or a page is accessed via URL manipulation.
+  const accessibleInspections = useMemo(() => {
+    if (!currentUser) return [];
+    if (currentUser.role === ROLES.INSPECTOR) {
+      return inspections.filter(i =>
+        String(i.inspector_id) === String(currentUser.id) &&
+        i.type !== "leave" &&
+        i.status !== "deleted"
+      );
+    }
+    return inspections.filter(i => i.type !== "leave" && i.status !== "deleted");
+  }, [currentUser, inspections]);
+
   let pageTitle = topBarTitles[page] || "FIMS";
   if (editingInspection) pageTitle = editingInspection.location_name;
   else if (viewingInspection) pageTitle = viewingInspection.location_name;
@@ -1043,7 +1061,7 @@ function AppContent() {
           onLogout={handleLogout} 
           currentUser={currentUser} 
           onNavigate={handleNavigate}
-          inspections={inspections}
+          inspections={accessibleInspections}
           onStartInspection={handleStartInspection}
           onAcceptTask={handleAcceptTask}
           onDeclineTask={handleDeclineTask}
@@ -1085,7 +1103,7 @@ function AppContent() {
               <SupervisorDashboard inspections={inspections} users={users} currentUser={currentUser} onView={handleViewInspection} />
             : 
               <InspectorDashboard 
-                inspections={inspections} 
+                inspections={accessibleInspections} 
                 users={users} 
                 currentUser={currentUser} 
                 onStartInspection={handleStartInspection} 
@@ -1095,29 +1113,29 @@ function AppContent() {
               />
           ) : page === "inspections" ? (
             <InspectionsList 
-              inspections={inspections} 
+              inspections={accessibleInspections} 
               currentUser={currentUser} 
               onView={handleViewInspection} 
               onCreate={() => setShowNewModal(true)}
               onDelete={handleDelete} 
             />
           ) : page === "report_center" ? (
-            <ReportCenter inspections={inspections} locations={locations} users={users} />
+            <ReportCenter inspections={accessibleInspections} locations={locations} users={users} />
           ) : page === "messages" ? (
             <Messages users={users} currentUser={currentUser} />
           ) : page === "alerts" ? (
-            <Alerts inspections={inspections} onView={handleViewInspection} onUpdate={handleUpdateInspection} />
+            <Alerts inspections={accessibleInspections} onView={handleViewInspection} onUpdate={handleUpdateInspection} />
           ) : page === "defects" ? (
             <Defects currentUser={currentUser} users={users} />
           ) : page === "schedule" ? (
             <div>
               <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end" }}>
-                <button className="btn btn-secondary btn-sm" onClick={() => exportToICS(inspections)}>
+                <button className="btn btn-secondary btn-sm" onClick={() => exportToICS(accessibleInspections)}>
                   <Icon name="download" size={13} /> Export to Outlook/Google (.ics)
                 </button>
               </div>
               <Schedule 
-                inspections={inspections} 
+                inspections={accessibleInspections} 
                 users={users} 
                 onUpdate={handleDragUpdate} 
                 onOpenModal={() => setShowScheduleModal(true)} 
@@ -1127,21 +1145,21 @@ function AppContent() {
             </div>
           ) : page === "field_map" ? (
             <LiveMap 
-              inspections={inspections} 
+              inspections={accessibleInspections} 
               users={users} 
               onRefresh={async () => { return; }} 
               refreshIntervalMs={45000} 
             />
           ) : page === "team" ? (
-            <Team users={users} inspections={inspections} />
+            <Team users={users} inspections={accessibleInspections} />
           ) : page === "monthly_report" ? (
-            <MonthlyReport inspections={inspections} locations={locations} />
+            <MonthlyReport inspections={accessibleInspections} locations={locations} />
           ) : page === "reports" ? (
-            <ReportsPage inspections={inspections} locations={locations} users={users} />
+            <ReportsPage inspections={accessibleInspections} locations={locations} users={users} />
           ) : page === "users" ? (
             <UsersPage users={users} setUsers={setUsers} />
           ) : page === "locations" ? (
-            <LocationsPage locations={locations} setLocations={setLocations} users={users} inspections={inspections} />
+            <LocationsPage locations={locations} setLocations={setLocations} users={users} inspections={accessibleInspections} />
           ) : page === "templates" ? (
             <TemplatesPage />
           ) : page === "activity_report" ? (
@@ -1152,7 +1170,7 @@ function AppContent() {
             <Notifications 
               currentUser={currentUser} 
               onNavigate={handleNavigate} 
-              inspections={inspections} 
+              inspections={accessibleInspections} 
               onStartInspection={handleStartInspection} 
               onAcceptTask={handleAcceptTask} 
               onDeclineTask={handleDeclineTask} 
@@ -1161,7 +1179,7 @@ function AppContent() {
             <CapaManagement currentUser={currentUser} users={users} />
           ) : page === "settings" ? (
             <SettingsPage 
-              inspections={inspections}
+              inspections={accessibleInspections}
               setInspections={setInspections}
             /> 
           ) : null}
