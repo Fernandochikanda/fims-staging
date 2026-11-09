@@ -11,6 +11,7 @@ import { logService } from "../services/logService";
 import SignaturePad from "../components/SignaturePad";
 import PhotoUploader from "../components/PhotoUploader";
 import VoiceInput from "../components/VoiceInput";
+import { showToast } from "../lib/toast";
 
 export default function InspectionForm({ inspection, onSave, onSubmit, onBack, allInspections }) {
   const draftKey = `fims_draft_${inspection.id}`;
@@ -30,13 +31,43 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   const [gpsCoords, setGpsCoords] = useState(null);
   const [showRefModal, setShowRefModal] = useState(null);
   const [refPhotos, setRefPhotos] = useState([]);
+  const [concurrentEditor, setConcurrentEditor] = useState(false);
   const draftOutboxTimer = useRef(null);
+  const pendingPhotos = useRef([]);
 
   // Hidden timing: start when form opens (inspector unaware)
   useEffect(() => {
     if (inspection?.id) {
       timingService.start(inspection);
     }
+  }, [inspection?.id]);
+
+  // Detect concurrent editors in other tabs (same browser, same inspection)
+  // Uses BroadcastChannel to communicate between tabs. Shows a warning banner
+  // so the inspector knows their changes might conflict with another tab.
+  useEffect(() => {
+    if (!inspection?.id || typeof BroadcastChannel === "undefined") return;
+    const channelName = `fims-insp-${inspection.id}`;
+    const channel = new BroadcastChannel(channelName);
+
+    // Announce our presence — other tabs will respond if they're also editing
+    channel.postMessage({ type: "editing", tabId: Date.now() });
+
+    // Listen for other tabs announcing their presence
+    channel.onmessage = (event) => {
+      if (event.data?.type === "editing") {
+        setConcurrentEditor(true);
+        // Respond so the other tab also knows about us
+        channel.postMessage({ type: "ack", tabId: Date.now() });
+      } else if (event.data?.type === "ack") {
+        setConcurrentEditor(true);
+      }
+    };
+
+    return () => {
+      channel.close();
+      setConcurrentEditor(false);
+    };
   }, [inspection?.id]);
 
   // Carregar template - VERSÃO MELHORADA COM SUPABASE
@@ -212,6 +243,33 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
     }
   }, [gpsCoords]);
 
+  // Flush pending photos when connection is restored
+  useEffect(() => {
+    const flushPendingPhotos = async () => {
+      if (pendingPhotos.current.length === 0) return;
+      showToast(`A enviar ${pendingPhotos.current.length} foto(s) em fila...`, "info", 3000);
+      const queue = [...pendingPhotos.current];
+      pendingPhotos.current = [];
+      for (const { entityId, file } of queue) {
+        try {
+          const meta = await photoStore.add(inspection.id, entityId, file);
+          if (meta && meta.url) {
+            setPhotosByItem(prev => ({ ...prev, [entityId]: [...(prev[entityId] || []), meta] }));
+          }
+        } catch (e) {
+          // Re-queue on failure
+          pendingPhotos.current.push({ entityId, file });
+        }
+      }
+      if (pendingPhotos.current.length === 0) {
+        showToast("Fotos enviadas com sucesso.", "success", 3000);
+      }
+    };
+
+    window.addEventListener("online", flushPendingPhotos);
+    return () => window.removeEventListener("online", flushPendingPhotos);
+  }, [inspection.id]);
+
   // Fotos (Carregar do JSON, Draft ou Supabase Storage)
   useEffect(() => {
     let cancelled = false;
@@ -246,34 +304,54 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   const setComment = (itemId, comment) => setItems(prev => prev.map(i => i.id === itemId ? { ...i, comment } : i));
   const setSectionObservation = (secId, text) => setSections(prev => prev.map(s => s.id === secId ? { ...s, observation: text } : s));
 
-  // FUNÇÃO ADD PHOTO COM TRATAMENTO DE ERROS
+  // FUNÇÃO ADD PHOTO — non-blocking error handling + offline queue
   const addPhoto = async (entityId, file) => {
+    // If offline, queue the photo for later upload (don't add broken URL to state)
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      pendingPhotos.current.push({ entityId, file });
+      showToast("Sem ligação. Foto em fila — será enviada quando houver internet.", "warning", 4000);
+      return;
+    }
     try {
       const meta = await photoStore.add(inspection.id, entityId, file);
       if (meta && meta.url) {
         setPhotosByItem(prev => ({ ...prev, [entityId]: [...(prev[entityId] || []), meta] }));
       } else {
-        alert("Erro ao carregar a foto. Tente novamente.");
+        showToast("Erro ao carregar a foto. Tente novamente.", "error", 4000);
       }
     } catch (error) {
       console.error("[InspectionForm] Falha no upload da foto:", error);
-      alert("Erro ao enviar a foto. Verifique se as permissões do Supabase Storage estão configuradas (RLS Policies).");
+      // If the error is network-related, queue for retry instead of just failing
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        pendingPhotos.current.push({ entityId, file });
+        showToast("Sem ligação. Foto em fila — será enviada quando houver internet.", "warning", 4000);
+      } else {
+        showToast("Erro ao enviar a foto: " + (error.message || "verifique as permissões do Storage."), "error", 5000);
+      }
     }
   };
 
   const removePhoto = async (entityId, photo) => {
-    await photoStore.remove(photo.id);
+    try {
+      await photoStore.remove(photo.id);
+    } catch (e) {
+      console.warn("[InspectionForm] Erro ao remover foto do Storage:", e);
+      showToast("A foto foi removida do formulário, mas pode ainda existir no armazenamento.", "warning", 4000);
+    }
     setPhotosByItem(prev => ({ ...prev, [entityId]: (prev[entityId] || []).filter(p => p.id !== photo.id) }));
   };
 
   const handleShowRefImage = (itemId) => {
     if (!allInspections) return;
+    if (!inspection.location_id) return showToast("Localização inválida para referência.", "warning", 3000);
     const clientInsps = allInspections.filter(i => String(i.location_id) === String(inspection.location_id) && i.id !== inspection.id && i.score_pct !== null);
-    if (clientInsps.length === 0) return alert("No previous inspections found for this client.");
+    if (clientInsps.length === 0) return showToast("Nenhuma inspeção anterior encontrada para este cliente.", "info", 3000);
     const lastInsp = clientInsps.sort((a,b) => new Date(b.date) - new Date(a.date))[0];
     photoStore.listByInspection(lastInsp.id).then(grouped => {
       setRefPhotos(grouped[itemId] || []);
       setShowRefModal(itemId);
+    }).catch(() => {
+      showToast("Não foi possível carregar imagens de referência.", "warning", 3000);
     });
   };
 
@@ -383,17 +461,23 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
               className="btn btn-primary" 
               onClick={async () => {
                 setIsLoadingTemplate(true);
-                const { templateService } = await import('../services/templateService');
-                const template = await templateService.fetchTemplateByClientName(inspection.location_name);
-                if (template.success && template.template) {
-                  const s = template.template.sections;
-                  setItems(s.flatMap(sec => sec.items.map(item => ({ ...item, section_id: sec.id, score: null, comment: "", photos: [] }))));
-                  setSections(s.map(sec => ({ id: sec.id, title: sec.title || sec.name, observation: "", photos: [] })));
-                  setTemplateSource('Supabase (retry)');
-                } else {
-                  alert('Template não encontrado no Supabase: ' + (template.error || 'Erro desconhecido'));
+                try {
+                  const { templateService } = await import('../services/templateService');
+                  const template = await templateService.fetchTemplateByClientName(inspection.location_name);
+                  if (template.success && template.template) {
+                    const s = template.template.sections;
+                    setItems(s.flatMap(sec => sec.items.map(item => ({ ...item, section_id: sec.id, score: null, comment: "", photos: [] }))));
+                    setSections(s.map(sec => ({ id: sec.id, title: sec.title || sec.name, observation: "", photos: [] })));
+                    setTemplateSource('Supabase (retry)');
+                  } else {
+                    showToast('Template não encontrado no Supabase: ' + (template.error || 'Erro desconhecido'), 'error', 5000);
+                  }
+                } catch (e) {
+                  console.error('[InspectionForm] Retry failed:', e);
+                  showToast('Erro ao carregar template: ' + (e.message || 'desconhecido'), 'error', 5000);
+                } finally {
+                  setIsLoadingTemplate(false);
                 }
-                setIsLoadingTemplate(false);
               }}
             >
               Tentar Novamente (Supabase)
@@ -432,6 +516,25 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
           <button className="btn btn-secondary btn-sm" onClick={() => setShowAIPanel(true)}><Icon name="star" size={13} /> AI Review</button>
         </div>
       </div>
+
+      {/* Concurrent Editor Warning — another tab is editing this inspection */}
+      {concurrentEditor && (
+        <div style={{
+          background: "#FEE2E2",
+          border: "1px solid #EF4444",
+          borderRadius: 8,
+          padding: "10px 16px",
+          marginBottom: 12,
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+          fontSize: 13,
+          color: "#991B1B",
+        }}>
+          <span style={{ fontSize: 18 }}>⚠️</span>
+          <span>Outro separador (aba) está a editar esta inspeção. As suas alterações podem ser sobrescritas. Feche um dos separadores para evitar conflitos.</span>
+        </div>
+      )}
 
       {/* Supervisor Feedback Banner — shown when inspection was returned for corrections */}
       {inspection.status === "needs_corrections" && (() => {
