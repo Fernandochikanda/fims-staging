@@ -42,11 +42,20 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   // Carregar template - VERSÃO MELHORADA COM SUPABASE
   useEffect(() => {
     async function loadTemplate() {
-      // Verificar se a inspeção já tem items
-      if (inspection.items && inspection.items.length > 0) {
-        console.log('[InspectionForm] Usando items da inspeção');
+      // Verificar se a inspeção já tem items (returned for corrections, or resumed draft)
+      if (Array.isArray(inspection.items) && inspection.items.length > 0) {
+        console.log('[InspectionForm] Usando items da inspeção (inclui notas e assinaturas)');
         setItems(inspection.items);
-        setSections(inspection.sections || []);
+        setSections(Array.isArray(inspection.sections) ? inspection.sections : []);
+        // CRITICAL: load ALL existing field values from the inspection object.
+        // Without this, the supervisor's correction note (stored in inspection.notes)
+        // is lost on the first save — the local state starts as "" and overwrites it.
+        // Same for clientMgrName, signatures, GPS — all would be wiped on save.
+        setNotes(inspection.notes || "");
+        setClientMgrName(inspection.client_mgr_name || "");
+        setInspectorSig(inspection.inspector_sig || "");
+        setClientSig(inspection.client_sig || "");
+        setGpsCoords(inspection.gps_coords || null);
         setTemplateSource("inspeção");
         return;
       }
@@ -414,6 +423,41 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
           <button className="btn btn-secondary btn-sm" onClick={() => setShowAIPanel(true)}><Icon name="star" size={13} /> AI Review</button>
         </div>
       </div>
+
+      {/* Supervisor Feedback Banner — shown when inspection was returned for corrections */}
+      {inspection.status === "needs_corrections" && (() => {
+        // Extract the supervisor's correction note from the notes field.
+        // InspectionDetail.jsx appends it as: notes + '\n\n[NECESSITA CORREÇÃO]: ' + rejectNote
+        const notesStr = String(notes || "");
+        const marker = "[NECESSITA CORREÇÃO]";
+        const markerIdx = notesStr.indexOf(marker);
+        const correctionNote = markerIdx >= 0
+          ? notesStr.slice(markerIdx + marker.length).replace(/^[:\s]+/, "").trim()
+          : "";
+        return correctionNote ? (
+          <div style={{
+            background: "#FEF3C7",
+            border: "1px solid #F59E0B",
+            borderLeft: "4px solid #F59E0B",
+            borderRadius: 8,
+            padding: "14px 16px",
+            marginBottom: 16,
+            display: "flex",
+            gap: 12,
+            alignItems: "flex-start",
+          }}>
+            <div style={{ fontSize: 20, lineHeight: 1 }}>⚠️</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: "#92400E", marginBottom: 4 }}>
+                Correções pedidas pelo supervisor:
+              </div>
+              <div style={{ fontSize: 13, color: "#78350F", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                {correctionNote}
+              </div>
+            </div>
+          </div>
+        ) : null;
+      })()}
 
       {/* Validation Modal */}
       {validationErrors && (
