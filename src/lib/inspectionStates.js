@@ -68,7 +68,7 @@ const TRANSITIONS = Object.freeze({
   [INSPECTION_STATUS.SUBMITTED]: [
     INSPECTION_STATUS.REVIEWED,           // supervisor approves
     INSPECTION_STATUS.NEEDS_CORRECTIONS,  // supervisor rejects for correction
-    // NOTE: no DELETED — submitted inspections are protected
+    INSPECTION_STATUS.DELETED,            // admin-only delete (role check enforces)
   ],
   [INSPECTION_STATUS.NEEDS_CORRECTIONS]: [
     INSPECTION_STATUS.IN_PROGRESS,        // inspector resumes to fix
@@ -77,7 +77,7 @@ const TRANSITIONS = Object.freeze({
   [INSPECTION_STATUS.REVIEWED]: [
     INSPECTION_STATUS.CLOSED,             // archive
     INSPECTION_STATUS.NEEDS_CORRECTIONS,  // reopen with reason (supervisor/admin only)
-    // NOTE: no DELETED — reviewed inspections are protected
+    INSPECTION_STATUS.DELETED,            // admin-only delete (role check enforces)
   ],
   [INSPECTION_STATUS.REJECTED]: [
     INSPECTION_STATUS.UNASSIGNED,         // reassign to different inspector
@@ -86,6 +86,8 @@ const TRANSITIONS = Object.freeze({
   ],
   [INSPECTION_STATUS.CLOSED]: [
     INSPECTION_STATUS.REVIEWED,           // reopen (admin only)
+    INSPECTION_STATUS.NEEDS_CORRECTIONS,  // reopen for corrections (admin only)
+    INSPECTION_STATUS.DELETED,            // admin-only delete (role check enforces)
   ],
   [INSPECTION_STATUS.DELETED]: [],        // terminal
   [INSPECTION_STATUS.LEAVE]: [
@@ -192,11 +194,13 @@ export function validateTransition(inspection, newStatus, currentUser) {
           message: "Apenas supervisores ou administradores podem devolver inspeções para correção.",
         };
       }
-      if (currentStatus !== INSPECTION_STATUS.SUBMITTED && currentStatus !== INSPECTION_STATUS.REVIEWED) {
+      if (currentStatus !== INSPECTION_STATUS.SUBMITTED
+          && currentStatus !== INSPECTION_STATUS.REVIEWED
+          && currentStatus !== INSPECTION_STATUS.CLOSED) {
         return {
           ok: false,
           code: "NOT_REVIEWABLE",
-          message: "Só pode devolver inspeções submetidas ou já aprovadas.",
+          message: "Só pode devolver inspeções submetidas, aprovadas ou fechadas.",
         };
       }
       break;
@@ -229,6 +233,8 @@ export function validateTransition(inspection, newStatus, currentUser) {
 
     case INSPECTION_STATUS.DELETED:
       // Deletion guard: submitted / reviewed / closed inspections are protected
+      // and require admin role. The matrix now allows these transitions, but
+      // this role check enforces admin-only access.
       if (
         currentStatus === INSPECTION_STATUS.SUBMITTED ||
         currentStatus === INSPECTION_STATUS.REVIEWED ||
@@ -239,6 +245,17 @@ export function validateTransition(inspection, newStatus, currentUser) {
             ok: false,
             code: "PROTECTED",
             message: `Inspeções "${labelOf(currentStatus)}" só podem ser eliminadas por um administrador (motivo obrigatório).`,
+          };
+        }
+      } else {
+        // For non-protected statuses: only the assigned inspector (their own)
+        // or supervisor/admin can delete. Prevents any inspector from deleting
+        // any other inspector's pending inspection.
+        if (!isAssignedInspector && !isSupervisorOrAbove) {
+          return {
+            ok: false,
+            code: "NOT_OWNED",
+            message: "Só pode eliminar as suas próprias inspeções. Inspeções de outros inspetores requerem supervisor ou administrador.",
           };
         }
       }

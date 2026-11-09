@@ -561,8 +561,11 @@ function AppContent() {
     let updated = { ...insp };
     let needsSave = false;
     
-    // GUARD: validate transition to in_progress
-    if (insp.status === "pending" || insp.status === "needs_corrections") {
+    // GUARD: always validate transition to in_progress (not just for pending/needs_corrections).
+    // If already in_progress, no status change needed — skip the guard.
+    // This prevents opening (and auto-saving) a submitted/reviewed/closed inspection
+    // as in_progress, which would revert its status.
+    if (insp.status !== "in_progress") {
       if (!guardTransition(insp, INSPECTION_STATUS.IN_PROGRESS, "Iniciar inspeção")) return;
       updated.status = "in_progress";
       needsSave = true;
@@ -606,10 +609,14 @@ function AppContent() {
   };
   
   const handleSubmitInspection = async (updated) => {
-    // GUARD: validate transition in_progress → submitted
-    if (!guardTransition(updated, INSPECTION_STATUS.SUBMITTED, "Submeter inspeção")) return;
+    // GUARD 1: validate transition against the STORED record, not the payload.
+    // The payload already has status: "submitted" (set by the form), so validating
+    // the payload would compare submitted → submitted (always allowed = useless).
+    // We must check the CURRENT status in state to enforce in_progress → submitted.
+    const stored = inspections.find(i => i.id === updated.id) || updated;
+    if (!guardTransition(stored, INSPECTION_STATUS.SUBMITTED, "Submeter inspeção")) return;
 
-    // GUARD: validate inspection content (safety net — same checks as the form,
+    // GUARD 2: validate inspection content (safety net — same checks as the form,
     // but enforced at the handler level so it can't be bypassed by calling
     // handleSubmitInspection directly). Closes loophole L6.
     const validation = validateInspectionSubmission(updated);
@@ -638,7 +645,11 @@ function AppContent() {
         dataService.queueInspectionSave(updated);
         const motivo = dataService.lastSaveError || "ligação indisponível";
         const semNet = typeof navigator !== "undefined" && navigator.onLine === false;
-        alert(`⚠️ A submissão não chegou ao servidor.\nMotivo: ${motivo}\n\n${semNet ? "O aparelho parece estar SEM internet (confirme dados móveis/Wi-Fi).\n\n" : ""}Ficou guardada neste dispositivo e será reenviada automaticamente assim que houver ligação.`);
+        showToast(`A submissão não chegou ao servidor. Motivo: ${motivo}. ${semNet ? "Aparelho sem internet." : ""} Ficou em fila e será reenviada.`, "warning", 6000);
+      } else {
+        // Save succeeded — clear the local draft (the form no longer deletes it
+        // so the handler can block before the draft is lost).
+        try { localStorage.removeItem('fims_draft_' + updated.id); } catch (e) {}
       }
     } catch (error) {
       console.error("Erro ao submeter no Supabase:", error);
@@ -679,9 +690,6 @@ function AppContent() {
     
     setInspections(prev => prev.map(i => i.id === insp.id ? merged : i));
     addAuditLog(currentUser, "Tarefa Aceite", "schedule", `Aceitou a tarefa para ${insp.location_name}`);
-    await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
-      `${currentUser.name} aceitou a tarefa para ${insp.location_name}.`, "schedule",
-      { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "taskacc:" + insp.id });
     try {
       const { dataService } = await import('./services/dataService');
       const ok = await dataService.saveInspection(merged);
@@ -690,6 +698,13 @@ function AppContent() {
       console.error("Erro ao salvar aceitação no Supabase:", error);
       try { const { dataService } = await import('./services/dataService'); dataService.queueInspectionSave(merged); } catch (e2) {}
     }
+    // Notify AFTER save — wrapped in try/catch so notification failure
+    // doesn't affect the saved data.
+    try {
+      await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
+        `${currentUser.name} aceitou a tarefa para ${insp.location_name}.`, "schedule",
+        { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "taskacc:" + insp.id });
+    } catch (e) { console.warn('[App] notifyEvent (accept) failed:', e); }
   };
   
   const handleDeclineTask = async (insp) => {
@@ -711,13 +726,15 @@ function AppContent() {
     
     setInspections(prev => prev.map(i => i.id === insp.id ? merged : i));
     addAuditLog(currentUser, "Tarefa Recusada", "schedule", `Recusou a tarefa para ${insp.location_name}. Motivo: ${reason}`);
-    await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
-      `⚠️ ${currentUser.name} RECUSOU a tarefa para ${insp.location_name}. Motivo: ${reason}`, "schedule",
-      { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "taskdec:" + insp.id });
     try {
       const { dataService } = await import('./services/dataService');
       await dataService.saveInspection(merged);
     } catch (error) { console.error("Erro ao salvar recusa no Supabase:", error); }
+    try {
+      await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
+        `⚠️ ${currentUser.name} RECUSOU a tarefa para ${insp.location_name}. Motivo: ${reason}`, "schedule",
+        { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "taskdec:" + insp.id });
+    } catch (e) { console.warn('[App] notifyEvent (decline) failed:', e); }
   };
 
   const handleRequestLeave = async (user) => {
@@ -730,17 +747,25 @@ function AppContent() {
       requireInput: true,
     });
     if (!date || !date.trim()) return;
+    // Validate date format (YYYY-MM-DD)
+    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+    if (!datePattern.test(date.trim())) {
+      showToast("Formato de data inválido. Use AAAA-MM-DD (ex: 2026-11-15).", "error", 5000);
+      return;
+    }
     const leaveTask = { id: genId(), inspector_id: user.id, inspector_name: user.name, date, type: "leave", status: "leave" };
     setInspections(prev => [leaveTask, ...prev]);
     addAuditLog(user, "Folga Pedida", "schedule", `Pediu folga para ${date}`);
-    await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
-      `${user.name} pediu folga para ${date}.`, "schedule",
-      { excludeId: user.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "leave:" + leaveTask.id });
     try {
       const { dataService } = await import('./services/dataService');
       await dataService.saveInspection(leaveTask);
     } catch (error) { console.error("Erro ao salvar folga no Supabase:", error); }
-    alert("Folga registada.");
+    try {
+      await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
+        `${user.name} pediu folga para ${date}.`, "schedule",
+        { excludeId: user.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "leave:" + leaveTask.id });
+    } catch (e) { console.warn('[App] notifyEvent (leave) failed:', e); }
+    showToast("Folga registada.", "success", 3000);
   };
   
   const handleDelete = async (id) => {
@@ -797,7 +822,7 @@ function AppContent() {
     const validation = validateInspectionAgainstTemplate(template, insp.items);
     if (!validation.valid) {
       console.error("[App] " + validation.error);
-      alert(`Inspeção Inválida!\n\n${validation.error}\n\nA inspeção não será criada até que a estrutura corresponda 100% ao template.`);
+      showToast(`Inspeção Inválida! ${validation.error} A inspeção não será criada até que a estrutura corresponda 100% ao template.`, "error", 6000);
       return; // Bloqueia a criação
     }
 
@@ -822,27 +847,33 @@ function AppContent() {
 
     setInspections(prev => prev.map(i => i.id === merged.id ? merged : i));
     if (viewingInspection) setViewingInspection(merged);
-    
-    if (merged.status === "needs_corrections") {
-      await notifyEvent(NOTIF_EVENTS.INSPECTION_REJECTED, users,
-        `A inspeção de ${merged.location_name} foi devolvida por ${currentUser.name}. Veja as correções necessárias.`,
-        "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "insprej:" + merged.id });
-    }
-    if (merged.status === "reviewed") {
-      await notifyEvent(NOTIF_EVENTS.INSPECTION_COMPLETED, users,
-        `Uma inspeção (${merged.location_name}) foi aprovada por ${currentUser.name}. Pronta para envio ao cliente.`,
-        "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "inspdone:" + merged.id });
-    }
+
+    // Save FIRST, then notify — wrapped in try/catch so notification
+    // failure doesn't affect the saved data.
     try {
       const { dataService } = await import('./services/dataService');
       const ok = await dataService.saveInspection(merged);
       if (!ok) {
         dataService.queueInspectionSave(merged);
-        alert(`⚠️ A atualização (aprovação/rejeição) não chegou ao servidor.\nMotivo: ${dataService.lastSaveError || "ligação indisponível"}\n\nFicou em fila e será reenviada automaticamente.`);
+        showToast(`A atualização não chegou ao servidor. Motivo: ${dataService.lastSaveError || "ligação indisponível"}. Ficou em fila.`, "warning", 6000);
       }
     } catch (error) {
       console.error("Erro ao salvar atualização no Supabase:", error);
       try { const { dataService } = await import('./services/dataService'); dataService.queueInspectionSave(merged); } catch (e2) {}
+    }
+    if (merged.status === "needs_corrections") {
+      try {
+        await notifyEvent(NOTIF_EVENTS.INSPECTION_REJECTED, users,
+          `A inspeção de ${merged.location_name} foi devolvida por ${currentUser.name}. Veja as correções necessárias.`,
+          "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "insprej:" + merged.id });
+      } catch (e) { console.warn('[App] notifyEvent (rejected) failed:', e); }
+    }
+    if (merged.status === "reviewed") {
+      try {
+        await notifyEvent(NOTIF_EVENTS.INSPECTION_COMPLETED, users,
+          `Uma inspeção (${merged.location_name}) foi aprovada por ${currentUser.name}. Pronta para envio ao cliente.`,
+          "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "inspdone:" + merged.id });
+      } catch (e) { console.warn('[App] notifyEvent (completed) failed:', e); }
     }
   };
 
@@ -854,7 +885,7 @@ function AppContent() {
       const validation = validateInspectionAgainstTemplate(template, task.items);
       if (!validation.valid) {
         console.error("[App] " + validation.error);
-        alert(`Inspeção Inválida para ${task.location_name}!\n\n${validation.error}`);
+        showToast(`Inspeção Inválida para ${task.location_name}! ${validation.error}`, "error", 6000);
         return null; // Marca para ser filtrado
       }
       
@@ -957,7 +988,7 @@ function AppContent() {
         { rolesOverride: ["inspector"], excludeId: currentUser.id, sender: currentUser,
           singleUser: String(merged.inspector_id) });
     }
-    if (notifyClient) alert("Client notified (Simulated).");
+    if (notifyClient) showToast("Cliente notificado (simulado).", "info", 3000);
     setReschedulingTask(null);
     try {
       const { dataService } = await import('./services/dataService');

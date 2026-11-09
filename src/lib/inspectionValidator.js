@@ -36,7 +36,7 @@ export function validateInspectionSubmission(inspection) {
   if (sections.length === 0) {
     return {
       valid: false,
-      errors: [{ section: "Estrutura", id: "structure", errors: ["Inspeção não tem secções."] }],
+      errors: [{ section: "Estrutura", id: "structure", errors: ["Inspeção sem secções."] }],
       summary: "Inspeção sem secções.",
     };
   }
@@ -48,34 +48,34 @@ export function validateInspectionSubmission(inspection) {
 
     // Section observation mandatory
     if (!secData.observation || !String(secData.observation).trim()) {
-      secErrors.push("Category observation is missing (Mandatory).");
+      secErrors.push("Observação da categoria em falta (obrigatório).");
     }
 
     // At least 3 photos per section
     const catPhotos = photosByItem[section.id] || [];
     if (catPhotos.length < 3) {
-      secErrors.push(`Category requires at least 3 photos (has ${catPhotos.length}).`);
+      secErrors.push(`A categoria exige pelo menos 3 fotos (tem ${catPhotos.length}).`);
     }
 
     // Each item must be scored
     sItems.forEach((item) => {
       if (item.score === null || item.score === undefined) {
-        secErrors.push(`Item unanswered: "${item.label || item.text}".`);
+        secErrors.push(`Item por responder: "${item.label || item.text}".`);
       } else if (item.score <= 3) {
         // Items with score ≤ 3 need a comment + at least 1 photo
         if (!item.comment || !String(item.comment).trim()) {
-          secErrors.push(`Note missing for: "${item.label || item.text}" (Score ${item.score}).`);
+          secErrors.push(`Nota em falta para: "${item.label || item.text}" (Score ${item.score}).`);
         }
         const itemPhotos = photosByItem[item.id] || [];
         if (itemPhotos.length < 1) {
-          secErrors.push(`1 photo required for: "${item.label || item.text}" (Score ${item.score}).`);
+          secErrors.push(`1 foto obrigatória para: "${item.label || item.text}" (Score ${item.score}).`);
         }
       }
     });
 
     if (secErrors.length > 0) {
       errors.push({
-        section: section.title || section.name || "Seção",
+        section: section.title || section.name || "Secção",
         id: section.id,
         errors: secErrors,
       });
@@ -84,10 +84,10 @@ export function validateInspectionSubmission(inspection) {
 
   // Signatures
   if (!inspection.client_mgr_name || !String(inspection.client_mgr_name).trim()) {
-    errors.push({ section: "Signatures", id: "sig", errors: ["Client Supervisor Name is missing."] });
+    errors.push({ section: "Assinaturas", id: "sig", errors: ["Nome do Supervisor do Cliente em falta."] });
   }
   if (!inspection.inspector_sig || !inspection.client_sig) {
-    errors.push({ section: "Signatures", id: "sig", errors: ["Signatures are not confirmed."] });
+    errors.push({ section: "Assinaturas", id: "sig", errors: ["Assinaturas não confirmadas."] });
   }
 
   const totalErrors = errors.reduce((n, s) => n + s.errors.length, 0);

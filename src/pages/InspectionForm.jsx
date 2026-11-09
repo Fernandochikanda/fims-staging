@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Icon } from "../lib/icons";
 import { calcScore, isItemComplete, getCategoryHealth, generateAISummary } from "../lib/helpers";
+import { validateInspectionSubmission } from "../lib/inspectionValidator";
 import { photoStore } from "../lib/photoStore";
 import { getClientTemplate, getClientTemplateAsync } from "../data/constants";
 import { timingService } from "../services/timingService";
@@ -153,8 +154,9 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
       } catch (e) {
         console.warn('[InspectionForm] Erro ao salvar draft:', e);
       }
-      // Debounced outbox queue — prevents flooding the outbox on every keystroke.
-      // The outbox deduplicates by inspection.id, so only the last version survives.
+      // Debounced save: when online, save directly to Supabase (which clears
+      // the outbox on success). When offline, queue to outbox for later flush.
+      // This prevents stale drafts from overwriting a successful submit.
       clearTimeout(draftOutboxTimer.current);
       draftOutboxTimer.current = setTimeout(() => {
         const fullInspection = {
@@ -168,8 +170,22 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
           photosByItem,
           status: 'in_progress',
         };
+        const isOnline = typeof navigator !== 'undefined' && navigator.onLine !== false;
         import('../services/dataService').then(({ dataService }) => {
-          dataService.queueInspectionSave(fullInspection);
+          if (isOnline) {
+            // Online: save directly. saveInspection clears the outbox on success.
+            dataService.saveInspection(fullInspection).then((ok) => {
+              if (!ok) {
+                // Save failed (network error) — queue to outbox as fallback
+                dataService.queueInspectionSave(fullInspection);
+              }
+            }).catch(() => {
+              dataService.queueInspectionSave(fullInspection);
+            });
+          } else {
+            // Offline: queue to outbox for later flush
+            dataService.queueInspectionSave(fullInspection);
+          }
         }).catch(() => {});
       }, 2000);
     }
@@ -276,63 +292,41 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   };
 
   const handleSubmit = () => {
-    timingService.stop(inspection.id);
-    logService.log({ id: inspection.inspector_id, name: inspection.inspector_name }, "Submeteu inspeção", "inspection", inspection.location_name);
-    const errors = [];
-    
-    sections.forEach(section => {
-      const sItems = items.filter(i => i.section_id === section.id);
-      const secData = sections.find(s => s.id === section.id) || { observation: "" };
-      const secErrors = [];
-      if (!secData.observation || !secData.observation.trim()) {
-        secErrors.push("Category observation is missing (Mandatory).");
-      }
-      const catPhotos = photosByItem[section.id] || [];
-      if (catPhotos.length < 3) {
-        secErrors.push(`Category requires at least 3 photos (has ${catPhotos.length}).`);
-      }
-      sItems.forEach(item => {
-        if (item.score === null) {
-          secErrors.push(`Item unanswered: "${item.label || item.text}".`);
-        } else if (item.score <= 3) {
-          if (!item.comment || !item.comment.trim()) {
-            secErrors.push(`Note missing for: "${item.label || item.text}" (Score ${item.score}).`);
-          }
-          const itemPhotos = photosByItem[item.id] || [];
-          if (itemPhotos.length < 1) {
-            secErrors.push(`1 photo required for: "${item.label || item.text}" (Score ${item.score}).`);
-          }
-        }
-      });
-      if (secErrors.length > 0) {
-        errors.push({ section: section.title || section.name || 'Seção', id: section.id, errors: secErrors });
-      }
-    });
-    if (!clientMgrName.trim()) errors.push({ section: "Signatures", id: "sig", errors: ["Client Supervisor Name is missing."] });
-    if (!inspectorSig || !clientSig) errors.push({ section: "Signatures", id: "sig", errors: ["Signatures are not confirmed."] });
-    if (errors.length > 0) {
-      setValidationErrors(errors);
-      return;
-    }
+    // Build the full inspection payload FIRST (before any side effects)
     const clearedItems = items.map(i => i.qc_comment ? { ...i, qc_comment: null } : i);
     const pct = calcScore(clearedItems);
     const alertLevel = pct < 60 ? "critical" : pct < 75 ? "warning" : "ok";
-    
-    localStorage.removeItem(draftKey);
-    onSubmit({ 
-      ...inspection, 
-      items: clearedItems, 
-      sections, 
-      notes, 
-      status: "submitted", 
-      score_pct: pct, 
-      alert_level: alertLevel, 
-      photosByItem, // ADICIONADO AQUI
-      client_mgr_name: clientMgrName, 
-      inspector_sig: inspectorSig, 
-      client_sig: clientSig, 
-      gps_coords: gpsCoords 
-    });
+    const payload = {
+      ...inspection,
+      items: clearedItems,
+      sections,
+      notes,
+      status: "submitted",
+      score_pct: pct,
+      alert_level: alertLevel,
+      photosByItem,
+      client_mgr_name: clientMgrName,
+      inspector_sig: inspectorSig,
+      client_sig: clientSig,
+      gps_coords: gpsCoords,
+    };
+
+    // VALIDATE FIRST — before stopping timer, logging, or deleting draft.
+    // Uses the shared inspectionValidator.js (same logic as the handler guard).
+    const validation = validateInspectionSubmission(payload);
+    if (!validation.valid) {
+      setValidationErrors(validation.errors);
+      return;
+    }
+
+    // Validation passed — now safe to stop timer and log
+    timingService.stop(inspection.id);
+    logService.log({ id: inspection.inspector_id, name: inspection.inspector_name }, "Submeteu inspeção", "inspection", inspection.location_name);
+
+    // Do NOT delete the local draft here — the handler (handleSubmitInspection)
+    // will delete it after the save succeeds. This prevents losing the draft
+    // if the handler blocks the submit (transition guard or validation guard).
+    onSubmit(payload);
   };
 
   const toggleSection = (secId) => {

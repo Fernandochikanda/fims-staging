@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Icon } from "../lib/icons";
 import { ROLES, PRIORITY_LEVELS } from "../data/constants";
+import { showToast } from "../lib/toast";
 
 export default function RescheduleModal({ inspection, users, onClose, onConfirm }) {
   const [date, setDate] = useState(inspection.date);
@@ -12,7 +13,10 @@ export default function RescheduleModal({ inspection, users, onClose, onConfirm 
   const [notifyInspector, setNotifyInspector] = useState(true);
 
   const handleConfirm = () => {
-    if (!reason.trim()) return alert("Reason for reschedule is mandatory.");
+    if (!reason.trim()) {
+      showToast("É obrigatório indicar o motivo do reagendamento.", "error", 4000);
+      return;
+    }
     onConfirm({
       ...inspection,
       date, start_time: time,

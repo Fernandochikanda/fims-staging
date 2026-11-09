@@ -58,7 +58,7 @@ export default function PromptModal({
   };
 
   return (
-    <div className="modal-overlay" onClick={onCancel}>
+    <div className="modal-overlay" onClick={onCancel} onKeyDown={handleKeyDown} tabIndex={-1} style={{ outline: "none" }}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
         <div className="modal-header">
           <div

@@ -147,6 +147,11 @@ export const dataService = {
         console.warn('[dataService] saveInspection error:', this.lastSaveError);
         return false;
       }
+      // CRITICAL: remove any stale outbox entry for this inspection so a
+      // previous draft (queued while offline) doesn't overwrite this save
+      // on the next flush. Without this, a submitted inspection can be
+      // reverted to in_progress by a stale draft in the outbox.
+      this._removeFromOutbox(inspection.id);
       return true;
     } catch (error) {
       this.lastSaveError = (error && (error.message || error.code)) || String(error);
@@ -174,6 +179,16 @@ export const dataService = {
   },
   _writeOutbox(queue) {
     try { localStorage.setItem(this._OUTBOX_KEY, JSON.stringify(queue.slice(0, 50))); } catch (e) {}
+  },
+  // Remove a single inspection from the outbox (used after successful save
+  // to prevent stale drafts from overwriting newer state).
+  _removeFromOutbox(id) {
+    if (!id) return;
+    const queue = this._readOutbox().filter(e => String(e.inspection?.id) !== String(id));
+    if (queue.length !== this._readOutbox().length) {
+      this._writeOutbox(queue);
+      console.log(`[dataService] Outbox: entrada removida para ${id} (${queue.length} restantes)`);
+    }
   },
   queueInspectionSave(inspection) {
     if (!inspection || !inspection.id) return;

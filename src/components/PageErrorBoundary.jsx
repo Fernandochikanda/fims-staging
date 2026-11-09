@@ -20,24 +20,26 @@ export default class PageErrorBoundary extends Component {
 
   componentDidCatch(error, errorInfo) {
     console.error("[PageErrorBoundary]", error, errorInfo);
-    // Best-effort audit log — don't crash if logging fails
-    try {
-      const stored = localStorage.getItem("fims_current_user");
-      const user = stored ? JSON.parse(stored) : null;
-      const userName = user?.name || "Sistema";
-      const logEntry = {
-        id: Date.now() + Math.random().toString(36).slice(2),
-        timestamp: new Date().toISOString(),
-        user: userName,
-        action: "Erro de Página",
-        type: "error",
-        detail: `${error?.message || "Erro desconhecido"} — ${window.location.hash || window.location.pathname}`,
-      };
-      const existing = JSON.parse(localStorage.getItem("fims_logs") || "[]");
-      localStorage.setItem("fims_logs", JSON.stringify([logEntry, ...existing].slice(0, 200)));
-    } catch (e) {
-      // Silent — logging is best-effort
-    }
+    // Log to Supabase via dataService (same path as addAuditLog) so crashes
+    // appear in the Audit page alongside other security/system entries.
+    (async () => {
+      try {
+        const stored = localStorage.getItem("fims_current_user");
+        const user = stored ? JSON.parse(stored) : null;
+        const userName = user?.name || "Sistema";
+        const userId = user?.id || "system";
+        const { dataService } = await import("../services/dataService");
+        await dataService.saveAuditLog({
+          userId,
+          userName,
+          action: "Erro de Página",
+          type: "error",
+          detail: `${error?.message || "Erro desconhecido"} — ${window.location.hash || window.location.pathname}`,
+        });
+      } catch (e) {
+        // Silent — logging is best-effort. Don't crash the error boundary.
+      }
+    })();
   }
 
   handleRetry = () => {
