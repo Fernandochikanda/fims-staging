@@ -1066,22 +1066,11 @@ function AppContent() {
     } catch (error) { console.error("Erro ao salvar reagendamento no Supabase:", error); }
   };
 
-  if (!isInitialized) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <div className="spinner"></div>
-      </div>
-    );
-  }
-
-  if (!currentUser) return <Login onLogin={handleLogin} />;
-
   // ─── RBAC: filter inspections by role ──────────────────────────
-  // Inspectors see ONLY their own inspections (excluding leave/deleted).
-  // Supervisors/Admins/CEOs see ALL inspections (excluding leave/deleted).
-  // This is applied to ALL pages that receive inspections as a prop —
-  // defense in depth so privacy is enforced even if sidebar permissions
-  // change or a page is accessed via URL manipulation.
+  // MUST be above the early returns (if (!isInitialized) / if (!currentUser))
+  // to comply with React's Rules of Hooks. Previously this sat below them,
+  // causing React error #310 (hooks count changes between renders) when
+  // isInitialized flipped from false to true → blank screen on login.
   const accessibleInspections = useMemo(() => {
     if (!currentUser) return [];
     if (currentUser.role === ROLES.INSPECTOR) {
@@ -1093,6 +1082,16 @@ function AppContent() {
     }
     return inspections.filter(i => i.type !== "leave" && i.status !== "deleted");
   }, [currentUser, inspections]);
+
+  if (!isInitialized) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+        <div className="spinner"></div>
+      </div>
+    );
+  }
+
+  if (!currentUser) return <Login onLogin={handleLogin} />;
 
   let pageTitle = topBarTitles[page] || "FIMS";
   if (editingInspection) pageTitle = editingInspection.location_name;
