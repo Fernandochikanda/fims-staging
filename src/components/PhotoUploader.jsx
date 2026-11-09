@@ -1,23 +1,33 @@
+// /src/components/PhotoUploader.jsx
+// Photo uploader with camera/gallery buttons.
+// Annotation feature removed (was broken — passed File as URL, canvas never loaded).
+// Multi-photo selection now processes ALL files instead of keeping only the last.
+
 import { useRef, useState } from "react";
 import { Icon } from "../lib/icons";
 import { optimizeImage } from "../lib/imageOptimizer";
-import PhotoAnnotator from "./PhotoAnnotator";
 
 export default function PhotoUploader({ id, photos, onAdd, onRemove, max = 3, isRequired, label }) {
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState(null);
-  const [dragging, setDragging] = useState(false);
-  const [pendingImage, setPendingImage] = useState(null);
 
   const handleFiles = async (files) => {
     setUploading(true);
     const arr = Array.from(files);
+    let added = 0;
     for (let file of arr) {
-      if (photos.length >= max) break;
-      const optimized = await optimizeImage(file);
-      setPendingImage(optimized);
+      if (photos.length + added >= max) break; // respect max limit across batch
+      try {
+        const optimized = await optimizeImage(file);
+        if (optimized) {
+          await onAdd(id, optimized);
+          added++;
+        }
+      } catch (e) {
+        console.warn('[PhotoUploader] Failed to process file:', file.name, e);
+      }
     }
     setUploading(false);
   };
@@ -56,20 +66,6 @@ export default function PhotoUploader({ id, photos, onAdd, onRemove, max = 3, is
         <div className="photo-lightbox-overlay" onClick={() => setLightboxUrl(null)}>
           <img src={lightboxUrl} alt="Evidência" />
         </div>
-      )}
-      {pendingImage && (
-        <PhotoAnnotator
-          imageUrl={pendingImage.url || pendingImage}
-          onSave={(annotatedUrl) => {
-            const orig = pendingImage.url || pendingImage;
-            onAdd(id, { ...pendingImage, url: annotatedUrl, originalUrl: orig, annotated: true });
-            setPendingImage(null);
-          }}
-          onSkip={() => {
-            onAdd(id, pendingImage);
-            setPendingImage(null);
-          }}
-        />
       )}
     </div>
   );

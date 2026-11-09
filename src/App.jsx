@@ -787,8 +787,18 @@ function AppContent() {
     addAuditLog(currentUser, "Tarefa Recusada", "schedule", `Recusou a tarefa para ${insp.location_name}. Motivo: ${reason}`);
     try {
       const { dataService } = await import('./services/dataService');
-      await dataService.saveInspection(merged);
-    } catch (error) { console.error("Erro ao salvar recusa no Supabase:", error); }
+      const ok = await dataService.saveInspection(merged);
+      if (!ok) {
+        dataService.queueInspectionSave(merged);
+        showToast("Recusa ficou em fila (sem ligação). Será reenviada.", "warning", 5000);
+      } else {
+        showToast("Tarefa recusada.", "success", 3000);
+      }
+    } catch (error) {
+      console.error("Erro ao salvar recusa no Supabase:", error);
+      try { const { dataService } = await import('./services/dataService'); dataService.queueInspectionSave(merged); } catch (e2) {}
+      showToast("Recusa ficou em fila (erro). Será reenviada.", "warning", 5000);
+    }
     try {
       await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
         `⚠️ ${currentUser.name} RECUSOU a tarefa para ${insp.location_name}. Motivo: ${reason}`, `inspections:${insp.id}`,

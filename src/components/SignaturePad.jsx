@@ -5,12 +5,21 @@ export default function SignaturePad({ label, onSave, onClear }) {
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasSig, setHasSig] = useState(false);
 
+  // Scale touch/mouse coordinates to match the canvas internal resolution.
+  // The canvas has a fixed internal size (400x120) but is CSS-scaled to fit
+  // the container. Without scaling, strokes appear offset on narrow screens.
   const getCoords = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
-    const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
-    return { x, y };
+    // Scale factor: canvas internal width / displayed width
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
+    };
   };
 
   const startDrawing = (e) => {

@@ -47,6 +47,8 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   // Detect concurrent editors in other tabs (same browser, same inspection)
   // Uses BroadcastChannel to communicate between tabs. Shows a warning banner
   // so the inspector knows their changes might conflict with another tab.
+  // Also broadcasts a 'closed' message on unmount so the other tab can clear
+  // the warning.
   useEffect(() => {
     if (!inspection?.id || typeof BroadcastChannel === "undefined") return;
     const channelName = `fims-insp-${inspection.id}`;
@@ -63,10 +65,15 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
         channel.postMessage({ type: "ack", tabId: Date.now() });
       } else if (event.data?.type === "ack") {
         setConcurrentEditor(true);
+      } else if (event.data?.type === "closed") {
+        // Another tab closed — clear the warning
+        setConcurrentEditor(false);
       }
     };
 
     return () => {
+      // Announce that we're closing so the other tab can clear its warning
+      channel.postMessage({ type: "closed", tabId: Date.now() });
       channel.close();
       setConcurrentEditor(false);
     };
