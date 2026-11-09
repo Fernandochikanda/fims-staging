@@ -71,10 +71,11 @@ export default function Topbar({ title, onMenuClick, onLogout, currentUser, onNa
 
   // Clicar na notificação
   const handleNotifClick = (notif) => {
-    // Marcar como lida
-    markNotificationRead(notif.id);
-
     // Se é notificação de inspeção, mostrar diálogo ou abrir inspeção
+    // NOTE: mark-as-read is deferred — only happens after the inspector
+    // actually acts (accept/decline/opens the inspection). If they close
+    // the dialog without acting, the notification stays unread so they
+    // don't forget the task is still pending. (Fixes Finding #20/E4)
     if (isInspectionNotif(notif.text) || (notif.link && notif.link.startsWith("inspections:"))) {
       const insp = findInspectionFromNotif(notif);
       if (insp) {
@@ -86,12 +87,14 @@ export default function Topbar({ title, onMenuClick, onLogout, currentUser, onNa
         }
         // If it's returned for corrections → open the inspection for editing
         if (insp.status === 'needs_corrections' && onStartInspection) {
+          markNotificationRead(notif.id); // mark read only when actually opening
           onStartInspection(insp);
           setShowNotif(false);
           return;
         }
         // Otherwise → view the inspection
         if (onViewInspection) {
+          markNotificationRead(notif.id); // mark read only when actually viewing
           onViewInspection(insp);
           setShowNotif(false);
           return;
@@ -103,6 +106,10 @@ export default function Topbar({ title, onMenuClick, onLogout, currentUser, onNa
     if (notif.link) {
       const page = notif.link.split(":")[0];
       onNavigate(page);
+    }
+    // Only mark non-inspection notifications as read immediately
+    if (!isInspectionNotif(notif.text) && !(notif.link && notif.link.startsWith("inspections:"))) {
+      markNotificationRead(notif.id);
     }
     setShowNotif(false);
   };
@@ -119,6 +126,9 @@ export default function Topbar({ title, onMenuClick, onLogout, currentUser, onNa
     
     if (onAcceptTask) onAcceptTask(insp);
     
+    // Mark notification as read ONLY after accepting
+    if (actionNotif?.notif?.id) markNotificationRead(actionNotif.notif.id);
+    
     // Iniciar a inspeção imediatamente
     if (onStartInspection) {
       setTimeout(() => onStartInspection(insp), 100);
@@ -132,7 +142,7 @@ export default function Topbar({ title, onMenuClick, onLogout, currentUser, onNa
     if (!actionNotif?.inspection) return;
     
     const reason = prompt('Motivo da recusa:');
-    if (reason === null) return; // Usuário cancelou
+    if (reason === null) return; // Usuário cancelou — notification stays unread
     
     const insp = {
       ...actionNotif.inspection,
@@ -142,6 +152,9 @@ export default function Topbar({ title, onMenuClick, onLogout, currentUser, onNa
     };
     
     if (onDeclineTask) onDeclineTask(insp);
+    
+    // Mark notification as read ONLY after declining
+    if (actionNotif?.notif?.id) markNotificationRead(actionNotif.notif.id);
     
     setActionNotif(null);
   };

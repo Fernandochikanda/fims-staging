@@ -630,10 +630,10 @@ function AppContent() {
     }
 
     setInspections(prev => prev.map(i => i.id === updated.id ? updated : i));
-    setEditingInspection(null);
-    localStorage.removeItem(STORAGE_KEYS.EDITING_INSPECTION);
-    setPage("inspections");
-    
+    // NOTE: do NOT navigate away yet — the save must complete first so the
+    // inspector isn't dropped from the form before knowing if it succeeded.
+    // Fixes Finding #18/F5 (submit navigates away before save resolves).
+
     try {
       const { dataService } = await import('./services/dataService');
       let ok = await dataService.saveInspection(updated);
@@ -656,6 +656,11 @@ function AppContent() {
       console.error("Erro ao submeter no Supabase:", error);
       try { const { dataService } = await import('./services/dataService'); dataService.queueInspectionSave(updated); } catch (e2) {}
     }
+
+    // NOW navigate away — only after the save attempt completed (success or queued)
+    setEditingInspection(null);
+    localStorage.removeItem(STORAGE_KEYS.EDITING_INSPECTION);
+    setPage("inspections");
     addAuditLog(currentUser, "Inspeção Submetida", "notification", `Supervisor(es) notificado(s) sobre a inspeção em ${updated.location_name}`);
     // ============================================================
     // FIM DE INSPEÇÃO (submissão) → supervisores recebem NOTIFICAÇÃO

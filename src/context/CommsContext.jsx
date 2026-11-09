@@ -20,6 +20,7 @@ import { supabase, TABLES, rpcWithFallback } from '../lib/supabase';
 import { notificationService } from '../services/notificationService';
 import announcementService from '../services/announcementService';
 import settingsService, { NOTIF_EVENTS } from '../services/settingsService';
+import { showToast } from '../lib/toast';
 
 const CommsContext = createContext();
 
@@ -273,6 +274,16 @@ export function CommsProvider({ children, currentUser }) {
       unsubNotif = notificationService.subscribe(currentUserId, (newNotif) => {
         mergeNotifications([newNotif]);
         notifyBrowser(newNotif.text);
+        // In-app toast pop-up — shows immediately if the user is on the page.
+        // Only shown for actionable notifications (not read receipts etc).
+        if (newNotif.text && document.visibilityState !== 'hidden') {
+          const isActionable = ['tarefa', 'inspeção', 'capa', 'correção', 'reagendada', 'recusada', 'aceit'].some(
+            kw => newNotif.text.toLowerCase().includes(kw)
+          );
+          if (isActionable) {
+            showToast(newNotif.text.slice(0, 120), 'info', 5000);
+          }
+        }
       });
 
       // 7) Realtime: mensagens FILTRADAS — dirigidas a mim + broadcasts

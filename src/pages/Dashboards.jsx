@@ -208,6 +208,7 @@ export function SupervisorDashboard({ inspections, users, currentUser, onView })
   const completedThisMonth = submitted.filter(i => i.date?.startsWith(new Date().toISOString().split("T")[0].substring(0, 7))).length;
   const totalThisMonth = myInsp.filter(i => i.date?.startsWith(new Date().toISOString().split("T")[0].substring(0, 7))).length;
   const reviewList = myInsp.filter(i => i.status === "submitted").slice(0, 5);
+  const declinedTasks = myInsp.filter(i => i.status === "rejected").slice(0, 10);
   const criticalAlerts = myInsp.filter(i => i.alert_level === "critical" && !i.resolved).slice(0, 5);
   
   const analytics = getCompanyAnalytics(inspections);
@@ -293,15 +294,36 @@ export function SupervisorDashboard({ inspections, users, currentUser, onView })
             </div>
           ))}
         </div>
-        <div className="card">
-          <h3 style={{ fontSize: 15, marginBottom: 12, color: "#A32D2D" }}>Critical Alerts</h3>
-          {criticalAlerts.length === 0 && <div style={{ fontSize: 12, color: "#ccc" }}>No critical alerts.</div>}
-          {criticalAlerts.map(insp => (
-            <div key={insp.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #eee", cursor: "pointer" }} onClick={() => onView({...insp, onlyFaults: true})}>
-              <div><div style={{ fontWeight: 500, fontSize: 13 }}>{insp.location_name}</div><div style={{ fontSize: 11, color: "#888" }}>{insp.inspector_name}</div></div>
-              <StatusBadge status="critical" />
+        <div>
+          {/* Declined Tasks Panel — shows inspections inspectors have declined */}
+          {declinedTasks.length > 0 && (
+            <div className="card" style={{ marginBottom: 16, borderLeft: "4px solid #A32D2D" }}>
+              <h3 style={{ fontSize: 15, marginBottom: 4, color: "#A32D2D" }}>⚠️ Tarefas Recusadas ({declinedTasks.length})</h3>
+              <p style={{ fontSize: 12, color: "#6B7280", marginBottom: 12 }}>Estes inspetores recusaram tarefas. Reatribua a outros inspetores.</p>
+              {declinedTasks.map(insp => (
+                <div key={insp.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #eee", cursor: "pointer" }} onClick={() => onView(insp)}>
+                  <div>
+                    <div style={{ fontWeight: 500, fontSize: 13 }}>{insp.location_name}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>Recusado por: {insp.inspector_name}</div>
+                    {insp.decline_reason && (
+                      <div style={{ fontSize: 11, color: "#A32D2D", marginTop: 2 }}>Motivo: {insp.decline_reason.slice(0, 80)}{insp.decline_reason.length > 80 ? "..." : ""}</div>
+                    )}
+                  </div>
+                  <StatusBadge status="rejected" />
+                </div>
+              ))}
             </div>
-          ))}
+          )}
+          <div className="card">
+            <h3 style={{ fontSize: 15, marginBottom: 12, color: "#A32D2D" }}>Critical Alerts</h3>
+            {criticalAlerts.length === 0 && <div style={{ fontSize: 12, color: "#ccc" }}>No critical alerts.</div>}
+            {criticalAlerts.map(insp => (
+              <div key={insp.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #eee", cursor: "pointer" }} onClick={() => onView({...insp, onlyFaults: true})}>
+                <div><div style={{ fontWeight: 500, fontSize: 13 }}>{insp.location_name}</div><div style={{ fontSize: 11, color: "#888" }}>{insp.inspector_name}</div></div>
+                <StatusBadge status="critical" />
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
