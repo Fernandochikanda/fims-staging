@@ -2,8 +2,13 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react()],
+  esbuild: {
+    // Drop console.log/warn/error in PRODUCTION builds only to reduce bundle
+    // size and prevent info leakage. Dev mode keeps them for debugging.
+    drop: command === 'build' ? ['console', 'debugger'] : [],
+  },
   build: {
     outDir: 'dist',
     sourcemap: false,
@@ -31,4 +36,4 @@ export default defineConfig({
       }
     }
   }
-})
+}))

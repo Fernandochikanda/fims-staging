@@ -16,6 +16,8 @@ export default function BulkScheduleModal({ locations, users, onClose, onCreate 
   const handleSave = () => {
     if (selectedLocs.length === 0) return alert("Selecione pelo menos um cliente.");
     
+    // Find the active supervisor dynamically (not hardcoded to ID 3)
+    const supervisor = users.find(u => u.role === ROLES.SUPERVISOR && u.active !== false) || null;
     const tasks = selectedLocs.map(locId => {
       const loc = locations.find(l => l.id === locId);
       const insp = users.find(u => u.id === Number(inspectorId));
@@ -26,7 +28,8 @@ export default function BulkScheduleModal({ locations, users, onClose, onCreate 
         location_id: loc.id, location_name: loc.name,
         inspector_id: insp ? insp.id : null,
         inspector_name: insp ? insp.name : null,
-        supervisor_id: 3, supervisor_name: "Ana Sitoe",
+        supervisor_id: supervisor ? supervisor.id : null,
+        supervisor_name: supervisor ? supervisor.name : null,
         status: insp ? "pending_acceptance" : "unassigned",
         accepted: null, date, start_time: time, type: "inspection",
         items: template.sections.flatMap(s => s.items.map(item => ({ ...item, section_id: s.id, score: null, comment: "", photos: [] }))),
