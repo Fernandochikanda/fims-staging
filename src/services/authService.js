@@ -197,6 +197,7 @@ export const authService = {
 
       try {
         await supabase.from('fims_logs').insert([{
+          id: String(logEntry.id),
           user_id: userId,
           user_name: userName,
           action,

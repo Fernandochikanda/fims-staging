@@ -451,12 +451,14 @@ export const dataService = {
 
   async saveAuditLog({ userId, userName, action, type, detail, id }) {
     try {
-      // Don't send 'id' — the Supabase client strips it anyway (detects
-      // auto-generated column), and sending it can cause a 400 if the
-      // column type doesn't match. Let the DB auto-generate the id.
+      // The fims_logs table has a TEXT 'id' column (NOT NULL, no default).
+      // The Supabase JS client strips it from the insert URL's columns= list
+      // (it detects primary keys), but the value IS sent in the request body.
+      // Without id, the insert fails with 400 (null violates not-null constraint).
       const { error } = await supabase
         .from('fims_logs')
         .insert([{
+          id: id || (Date.now() + Math.random().toString(36).slice(2)),
           user_id: userId,
           user_name: userName,
           action,
