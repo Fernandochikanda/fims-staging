@@ -211,6 +211,7 @@ function AppContent() {
   const [reschedulingTask, setReschedulingTask] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [promptModal, setPromptModal] = useState(null);
+  const [capaCount, setCapaCount] = useState(0);
 
   const [isInitialized, setIsInitialized] = useState(false);
 
@@ -481,6 +482,25 @@ function AppContent() {
 
     refreshDefects();
     const iv = setInterval(refreshDefects, 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [isInitialized, currentUser?.id]);
+
+  // --- CAPA count for sidebar badge — auto-marks overdue + fetches summary ---
+  useEffect(() => {
+    if (!isInitialized || !currentUser) return;
+    const fetchCapaCount = async () => {
+      try {
+        const { capaService } = await import('./services/capaService');
+        await capaService.markOverdue().catch(() => {});
+        const res = await capaService.getSummary(null);
+        if (res.success) {
+          const open = (res.summary.open || 0) + (res.summary.overdue || 0) + (res.summary.in_progress || 0);
+          setCapaCount(open);
+        }
+      } catch (e) { /* silent — best effort */ }
+    };
+    fetchCapaCount();
+    const iv = setInterval(fetchCapaCount, 60 * 1000); // every 60s
     return () => clearInterval(iv);
   }, [isInitialized, currentUser?.id]);
 
@@ -1086,6 +1106,7 @@ function AppContent() {
         onNavigate={handleNavigate} 
         alertCount={alertCount} 
         notifCount={notifCount} 
+        capaCount={capaCount}
         isOpen={sidebarOpen} 
         onClose={() => setSidebarOpen(false)} 
       />
@@ -1134,9 +1155,9 @@ function AppContent() {
             />
           ) : page === "dashboard" ? (
             currentUser.role === ROLES.CEO || currentUser.role === ROLES.ADMIN ? 
-              <CEODashboard inspections={inspections} locations={locations} auditLogs={auditLogs} currentUser={currentUser} onView={handleViewInspection} />
+              <CEODashboard inspections={inspections} locations={locations} auditLogs={auditLogs} currentUser={currentUser} onView={handleViewInspection} onNavigate={handleNavigate} />
             : currentUser.role === ROLES.SUPERVISOR ? 
-              <SupervisorDashboard inspections={inspections} users={users} currentUser={currentUser} onView={handleViewInspection} />
+              <SupervisorDashboard inspections={inspections} users={users} currentUser={currentUser} onView={handleViewInspection} onNavigate={handleNavigate} />
             : 
               <InspectorDashboard 
                 inspections={accessibleInspections} 

@@ -13,6 +13,8 @@ import logoUrl from "../LOGO.png";
 import { useLang } from "../context/LangContext";
 import { useComms } from "../context/CommsContext";
 import { useState, useEffect } from "react";
+import { capaService, CAPA_STATUS } from "../services/capaService";
+import CapaSummaryWidget from "../components/CapaSummaryWidget";
 
 // Chave para localStorage dos avisos dispensados
 const DISMISSED_SYSTEM_ALERTS_KEY = "fims_dismissed_system_alerts";
@@ -190,7 +192,7 @@ export function CEODashboard({ inspections, locations, auditLogs, currentUser, o
   return <CEODashboardView inspections={inspections} locations={locations} auditLogs={auditLogs} currentUser={currentUser} onView={onView} />;
 }
 
-export function SupervisorDashboard({ inspections, users, currentUser, onView }) {
+export function SupervisorDashboard({ inspections, users, currentUser, onView, onNavigate }) {
   // Usar o hook personalizado (sem avisos hardcoded)
   const { visibleAlerts, handleDismiss } = useSystemAlerts();
 
@@ -241,6 +243,9 @@ export function SupervisorDashboard({ inspections, users, currentUser, onView })
           ))}
         </div>
       )}
+
+      {/* CAPA Summary Widget */}
+      <CapaSummaryWidget currentUser={currentUser} onNavigate={onNavigate} />
 
       <div className="metric-grid">
         <div className="metric-card"><div className="metric-label">My Team</div><div className="metric-value" style={{ color: "#1E2A3A" }}>{teamCount}</div></div>

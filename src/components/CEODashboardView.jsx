@@ -13,6 +13,7 @@ import StatusBadge from "./StatusBadge";
 import ScoreRing from "./ScoreRing";
 import defectService from "../services/defectService";
 import { useComms } from "../context/CommsContext";
+import CapaSummaryWidget from "./CapaSummaryWidget";
 import logoUrl from "../LOGO.png";
 import { fetchLogoAsset, fitDims } from "../lib/reportMedia";
 
@@ -71,7 +72,7 @@ function timeAgo(ts) {
   return "há " + d + "d";
 }
 
-export default function CEODashboardView({ inspections, locations, auditLogs, currentUser, onView }) {
+export default function CEODashboardView({ inspections, locations, auditLogs, currentUser, onView, onNavigate }) {
   const { createAnnouncement } = useComms();
   const [period, setPeriod] = useState("month");
   const [showAnnModal, setShowAnnModal] = useState(false);
@@ -423,6 +424,9 @@ export default function CEODashboardView({ inspections, locations, auditLogs, cu
           </button>
         </div>
       </div>
+
+      {/* CAPA Summary Widget */}
+      <CapaSummaryWidget currentUser={currentUser} onNavigate={onNavigate} />
 
       <div className="metric-grid">
         {kpiCards.map((k, i) => (

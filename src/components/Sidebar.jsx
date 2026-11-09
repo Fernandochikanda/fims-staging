@@ -2,7 +2,7 @@ import { Icon } from "../lib/icons";
 import { ROLES } from "../data/constants";
 import { useLang } from "../context/LangContext";
 
-export default function Sidebar({ currentUser, activePage, onNavigate, alertCount, notifCount, isOpen, onClose }) {
+export default function Sidebar({ currentUser, activePage, onNavigate, alertCount, notifCount, capaCount, isOpen, onClose }) {
   const role = currentUser.role;
   const { t } = useLang();
 
@@ -17,7 +17,7 @@ export default function Sidebar({ currentUser, activePage, onNavigate, alertCoun
     { id: "team", icon: "users", label: "Equipa (KPIs)", roles: [ROLES.ADMIN, ROLES.SUPERVISOR] },
     { id: "activity_report", icon: "audit", label: "Atividade", roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR] },
     { id: "alerts", icon: "alert", label: t.alerts, badge: alertCount || null, roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR] },
-    { id: "capa", icon: "alert", label: "CAPA", roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR, ROLES.INSPECTOR] },
+    { id: "capa", icon: "alert", label: "CAPA", badge: capaCount || null, roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR, ROLES.INSPECTOR] },
     { id: "defects", icon: "alert", label: "Defeitos", roles: [ROLES.ADMIN, ROLES.CEO, ROLES.SUPERVISOR] },
     { id: "users", icon: "users", label: t.users, roles: [ROLES.ADMIN] },
     { id: "locations", icon: "location", label: t.locations, roles: [ROLES.ADMIN, ROLES.SUPERVISOR] },
