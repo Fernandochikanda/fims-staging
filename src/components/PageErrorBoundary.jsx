@@ -35,6 +35,7 @@ export default class PageErrorBoundary extends Component {
           action: "Erro de Página",
           type: "error",
           detail: `${error?.message || "Erro desconhecido"} — ${window.location.hash || window.location.pathname}`,
+          id: Date.now() + Math.random().toString(36).slice(2),
         });
       } catch (e) {
         // Silent — logging is best-effort. Don't crash the error boundary.

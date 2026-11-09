@@ -357,8 +357,12 @@ export default function CapaManagement({ currentUser, users }) {
         </button>
       </div>
 
-      {/* Content — always wrapped in a stable div to prevent DOM reconciliation issues */}
-      <div style={{ minHeight: 200 }}>
+      {/* Content — key forces React to unmount/remount when type changes,
+          preventing 'removeChild' DOM reconciliation errors */}
+      <div
+        key={state.loading ? 'loading' : state.error ? 'error' : state.capas.length === 0 ? 'empty' : 'table'}
+        style={{ minHeight: 200 }}
+      >
         {content}
       </div>
 

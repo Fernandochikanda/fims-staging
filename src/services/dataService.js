@@ -449,11 +449,12 @@ export const dataService = {
     }
   },
 
-  async saveAuditLog({ userId, userName, action, type, detail }) {
+  async saveAuditLog({ userId, userName, action, type, detail, id }) {
     try {
       const { error } = await supabase
         .from('fims_logs')
         .insert([{
+          id: id || (Date.now() + Math.random().toString(36).slice(2)),
           user_id: userId,
           user_name: userName,
           action,
