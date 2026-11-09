@@ -17,6 +17,7 @@ import LiveMap from "./pages/LiveMap";
 import Team from "./pages/Team";
 import Messages from "./pages/Messages";
 import Notifications from "./pages/Notifications";
+import CapaManagement from "./pages/CapaManagement";
 import ScheduleModal from "./components/ScheduleModal";
 import RescheduleModal from "./components/RescheduleModal";
 import BulkScheduleModal from "./components/BulkScheduleModal";
@@ -492,7 +493,7 @@ function AppContent() {
     users: "Utilizadores", locations: "Localizações", templates: "Templates", audit: "Auditoria", 
     settings: "Configurações", monthly_report: "Relatório Mensal", schedule: "Operations Calendar", 
     field_map: "Mapa de Campo", team: "Equipa (KPIs)", messages: "Mensagens", report_center: "Centro de Relatórios",
-    notifications: "Notificações"
+    notifications: "Notificações", capa: "CAPA — Ações Corretivas"
   };
 
   const addAuditLog = (user, action, type, detail) => {
@@ -1156,6 +1157,8 @@ function AppContent() {
               onAcceptTask={handleAcceptTask} 
               onDeclineTask={handleDeclineTask} 
             />
+          ) : page === "capa" ? (
+            <CapaManagement currentUser={currentUser} users={users} />
           ) : page === "settings" ? (
             <SettingsPage 
               inspections={inspections}
