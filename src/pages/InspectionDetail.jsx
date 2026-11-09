@@ -193,10 +193,9 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
     };
     onUpdate(updated);
     addAuditLog(currentUser, "Inspeção Rejeitada", "review", `Rejeitou a inspeção de ${inspection.location_name}. Motivo: ${rejectNote}`);
-    // Avisar o inspetor (notificação conforme configurações)
-    await notifyEvent(NOTIF_EVENTS.INSPECTION_REJECTED, users,
-      `A inspeção de ${inspection.location_name} foi devolvida por ${currentUser.name}. Veja as correções necessárias: ${rejectNote}`,
-      "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "insprej:" + inspection.id });
+    // NOTE: notification is sent by App.jsx handleUpdateInspection (single source of truth).
+    // Previously this also fired notifyEvent here, causing a duplicate notification
+    // with conflicting text. Removed to fix Finding D5.
     setShowRejectBox(false); 
     setRejectNote(""); 
     setQcItem(null);

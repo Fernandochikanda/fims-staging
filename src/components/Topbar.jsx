@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { Icon } from "../lib/icons";
 import { useComms } from "../context/CommsContext";
 
-export default function Topbar({ title, onMenuClick, onLogout, currentUser, onNavigate, inspections, onStartInspection, onAcceptTask, onDeclineTask }) {
+export default function Topbar({ title, onMenuClick, onLogout, currentUser, onNavigate, inspections, onStartInspection, onAcceptTask, onDeclineTask, onViewInspection }) {
   const { notifications, markAllRead, markNotificationRead } = useComms();
   const [showNotif, setShowNotif] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -36,26 +36,35 @@ export default function Topbar({ title, onMenuClick, onLogout, currentUser, onNa
     return keywords.some(kw => text.toLowerCase().includes(kw));
   };
 
-  // Encontrar inspeção pendente associada à notificação
-  const findPendingInspection = (notif) => {
+  // Encontrar inspeção associada à notificação — by ID from the link field.
+  // The link format is "inspections:INSPECTION_ID" (set by App.jsx notifyEvent calls).
+  // Falls back to regex only if the link doesn't contain an ID (legacy notifications).
+  const findInspectionFromNotif = (notif) => {
     if (!inspections) return null;
-    
-    // Tentar encontrar por texto (nome do local)
-    const locationMatch = notif.text?.match(/(?:para|em|at)\s+(.+?)(?:\.|,|$)/i);
+
+    // Primary: parse inspectionId from the link ("inspections:insp_123")
+    if (notif.link && notif.link.includes(":")) {
+      const inspId = notif.link.split(":")[1];
+      if (inspId) {
+        const found = inspections.find(i => String(i.id) === String(inspId));
+        if (found) return found;
+      }
+    }
+
+    // Legacy fallback: regex on notification text (for old notifications without ID in link)
+    const locationMatch = notif.text?.match(/no local\s+(.+?)(?:\.|,|$)/i);
     const locationName = locationMatch ? locationMatch[1].trim() : null;
-    
     if (locationName) {
-      const insp = inspections.find(i => 
-        i.status === 'pending_acceptance' && 
+      const insp = inspections.find(i =>
         String(i.inspector_id) === String(currentUser.id) &&
         i.location_name?.toLowerCase().includes(locationName.toLowerCase())
       );
       if (insp) return insp;
     }
-    
-    // Fallback: retornar qualquer inspeção pendente do inspector
-    return inspections.find(i => 
-      i.status === 'pending_acceptance' && 
+
+    // Last resort: if it's a pending_acceptance task, return the first match
+    return inspections.find(i =>
+      i.status === 'pending_acceptance' &&
       String(i.inspector_id) === String(currentUser.id)
     );
   };
@@ -64,20 +73,36 @@ export default function Topbar({ title, onMenuClick, onLogout, currentUser, onNa
   const handleNotifClick = (notif) => {
     // Marcar como lida
     markNotificationRead(notif.id);
-    
-    // Se é notificação de inspeção, mostrar diálogo
-    if (isInspectionNotif(notif.text)) {
-      const insp = findPendingInspection(notif);
+
+    // Se é notificação de inspeção, mostrar diálogo ou abrir inspeção
+    if (isInspectionNotif(notif.text) || (notif.link && notif.link.startsWith("inspections:"))) {
+      const insp = findInspectionFromNotif(notif);
       if (insp) {
-        setActionNotif({ notif, inspection: insp });
-        setShowNotif(false);
-        return;
+        // If it's a pending task → show accept/decline dialog
+        if (insp.status === 'pending_acceptance') {
+          setActionNotif({ notif, inspection: insp });
+          setShowNotif(false);
+          return;
+        }
+        // If it's returned for corrections → open the inspection for editing
+        if (insp.status === 'needs_corrections' && onStartInspection) {
+          onStartInspection(insp);
+          setShowNotif(false);
+          return;
+        }
+        // Otherwise → view the inspection
+        if (onViewInspection) {
+          onViewInspection(insp);
+          setShowNotif(false);
+          return;
+        }
       }
     }
-    
-    // Para outras notificações, navegar para o link
+
+    // Para outras notificações, navegar para o link (strip the ID part if present)
     if (notif.link) {
-      onNavigate(notif.link);
+      const page = notif.link.split(":")[0];
+      onNavigate(page);
     }
     setShowNotif(false);
   };

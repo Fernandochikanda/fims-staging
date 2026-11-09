@@ -666,7 +666,7 @@ function AppContent() {
     try {
       await notifyEvent(NOTIF_EVENTS.INSPECTION_SUBMITTED, users,
         `📋 Nova inspeção submetida por ${currentUser.name} para ${updated.location_name} — aguarda revisão.`,
-        "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "inspsub:" + updated.id });
+        `inspections:${updated.id}`, { excludeId: currentUser.id, sender: currentUser, dedupeKey: "inspsub:" + updated.id });
     } catch (e) { console.warn('[App] notifyEvent (submitted) failed:', e); }
 
     const lowScoreItems = (updated.items || []).filter(i => i.score !== null && i.score <= 2);
@@ -683,7 +683,7 @@ function AppContent() {
             `${result.created} CAPA(s) gerada(s) para ${updated.location_name} — ${lowScoreItems.length} defeito(s) crítico(s) (score 1-2). Prazo: ${dueLabel}.`);
           const capaMsg = `⚠️ CAPA: ${updated.location_name} tem ${result.created} defeito(s) crítico(s) (score 1-2). Correção obrigatória em 48h. Verifique a página CAPA.`;
           try {
-            await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, capaMsg, "inspections", {
+            await notifyEvent(NOTIF_EVENTS.DEFECT_NEW, users, capaMsg, `inspections:${updated.id}`, {
               excludeId: currentUser.id, sender: currentUser, dedupeKey: "capa:" + updated.id });
           } catch (e) { console.warn('[App] notifyEvent (CAPA) failed:', e); }
         }
@@ -717,7 +717,7 @@ function AppContent() {
     // doesn't affect the saved data.
     try {
       await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
-        `${currentUser.name} aceitou a tarefa para ${insp.location_name}.`, "schedule",
+        `${currentUser.name} aceitou a tarefa para ${insp.location_name}.`, `inspections:${insp.id}`,
         { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "taskacc:" + insp.id });
     } catch (e) { console.warn('[App] notifyEvent (accept) failed:', e); }
   };
@@ -747,7 +747,7 @@ function AppContent() {
     } catch (error) { console.error("Erro ao salvar recusa no Supabase:", error); }
     try {
       await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
-        `⚠️ ${currentUser.name} RECUSOU a tarefa para ${insp.location_name}. Motivo: ${reason}`, "schedule",
+        `⚠️ ${currentUser.name} RECUSOU a tarefa para ${insp.location_name}. Motivo: ${reason}`, `inspections:${insp.id}`,
         { excludeId: currentUser.id, rolesOverride: ["supervisor", "admin"], sender: currentUser, dedupeKey: "taskdec:" + insp.id });
     } catch (e) { console.warn('[App] notifyEvent (decline) failed:', e); }
   };
@@ -877,17 +877,28 @@ function AppContent() {
       try { const { dataService } = await import('./services/dataService'); dataService.queueInspectionSave(merged); } catch (e2) {}
     }
     if (merged.status === "needs_corrections") {
+      // Extract the supervisor's correction note from the notes field.
+      // InspectionDetail.jsx appends it as: notes + '\n\n[NECESSITA CORREÇÃO]: ' + rejectNote
+      const notesStr = String(merged.notes || "");
+      const marker = "[NECESSITA CORREÇÃO]";
+      const markerIdx = notesStr.indexOf(marker);
+      const rejectNote = markerIdx >= 0
+        ? notesStr.slice(markerIdx + marker.length).replace(/^[:\s]+/, "").trim()
+        : "";
+      // Target ONLY the assigned inspector (not all inspectors).
+      // Include the rejectNote so the inspector sees the supervisor's feedback
+      // directly in the notification. Encode inspectionId in the link for deep-linking.
       try {
         await notifyEvent(NOTIF_EVENTS.INSPECTION_REJECTED, users,
-          `A inspeção de ${merged.location_name} foi devolvida por ${currentUser.name}. Veja as correções necessárias.`,
-          "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "insprej:" + merged.id });
+          `A inspeção de ${merged.location_name} foi devolvida por ${currentUser.name}. Correções necessárias${rejectNote ? ": " + rejectNote : ""}.`,
+          `inspections:${merged.id}`, { excludeId: currentUser.id, sender: currentUser, dedupeKey: "insprej:" + merged.id, singleUser: String(merged.inspector_id) });
       } catch (e) { console.warn('[App] notifyEvent (rejected) failed:', e); }
     }
     if (merged.status === "reviewed") {
       try {
         await notifyEvent(NOTIF_EVENTS.INSPECTION_COMPLETED, users,
           `Uma inspeção (${merged.location_name}) foi aprovada por ${currentUser.name}. Pronta para envio ao cliente.`,
-          "inspections", { excludeId: currentUser.id, sender: currentUser, dedupeKey: "inspdone:" + merged.id });
+          `inspections:${merged.id}`, { excludeId: currentUser.id, sender: currentUser, dedupeKey: "inspdone:" + merged.id, singleUser: String(merged.inspector_id) });
       } catch (e) { console.warn('[App] notifyEvent (completed) failed:', e); }
     }
   };
@@ -927,7 +938,7 @@ function AppContent() {
         await dataService.saveInspection(task);
         if (task.inspector_id) {
           await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
-            `Nova tarefa agendada para ${task.date} no local ${task.location_name}.`, "schedule",
+            `Nova tarefa agendada para ${task.date} no local ${task.location_name}.`, `inspections:${task.id}`,
             { rolesOverride: ["inspector"], excludeId: currentUser.id, sender: currentUser,
               singleUser: String(task.inspector_id), dedupeKey: "tasksch:" + task.id });
         }
@@ -959,7 +970,7 @@ function AppContent() {
         await dataService.saveInspection(task);
         if (task.inspector_id) {
           await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
-            `Nova tarefa agendada para ${task.date} no local ${task.location_name}.`, "schedule",
+            `Nova tarefa agendada para ${task.date} no local ${task.location_name}.`, `inspections:${task.id}`,
             { rolesOverride: ["inspector"], excludeId: currentUser.id, sender: currentUser,
               singleUser: String(task.inspector_id), dedupeKey: "tasksch:" + task.id });
         }
@@ -974,7 +985,7 @@ function AppContent() {
     setInspections(prev => prev.map(i => i.id === merged.id ? merged : i));
     if (notifyInspector && merged.inspector_id) {
       await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
-        `Tarefa atualizada: ${merged.location_name} movida para ${merged.date}.`, "schedule",
+        `Tarefa atualizada: ${merged.location_name} movida para ${merged.date}.`, `inspections:${merged.id}`,
         { rolesOverride: ["inspector"], excludeId: currentUser.id, sender: currentUser,
           singleUser: String(merged.inspector_id) });
     }
@@ -999,7 +1010,7 @@ function AppContent() {
     addAuditLog(currentUser, "Inspeção Reagendada", "schedule", `Reagendou ${merged.location_name} para ${merged.date}. Motivo: ${merged.reschedule_reason}`);
     if (notifyInspector && merged.inspector_id) {
       await notifyEvent(NOTIF_EVENTS.TASK_SCHEDULED, users,
-        `Inspeção reagendada para ${merged.date} às ${merged.start_time}.`, "schedule",
+        `Inspeção reagendada para ${merged.date} às ${merged.start_time}.`, `inspections:${merged.id}`,
         { rolesOverride: ["inspector"], excludeId: currentUser.id, sender: currentUser,
           singleUser: String(merged.inspector_id) });
     }
@@ -1065,6 +1076,7 @@ function AppContent() {
           onStartInspection={handleStartInspection}
           onAcceptTask={handleAcceptTask}
           onDeclineTask={handleDeclineTask}
+          onViewInspection={handleViewInspection}
         />
         <div className="page scrollbar-thin">
           <PageErrorBoundary
