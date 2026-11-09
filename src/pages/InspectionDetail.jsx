@@ -988,6 +988,11 @@ export default function InspectionDetail({ inspection, currentUser, onBack, onUp
                       {item.qc_comment && (
                         <div style={{ width: '100%', fontSize: 13, color: '#A32D2D', background: '#FCEBEB', padding: '6px 10px', borderRadius: 6, marginTop: 4, borderLeft: "3px solid #A32D2D" }}>
                           ⚠️ Correção: {item.qc_comment}
+                          {item.qc_addressed_at && (
+                            <span style={{ marginLeft: 8, fontSize: 11, color: '#0F6E56', fontWeight: 500 }}>
+                              ✓ Corrigido pelo inspetor ({new Date(item.qc_addressed_at).toLocaleString("pt-PT", { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })})
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>

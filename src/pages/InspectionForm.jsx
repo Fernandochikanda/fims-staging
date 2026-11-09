@@ -302,12 +302,21 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
 
   const handleSubmit = () => {
     // Build the full inspection payload FIRST (before any side effects)
-    const clearedItems = items.map(i => i.qc_comment ? { ...i, qc_comment: null } : i);
-    const pct = calcScore(clearedItems);
+    // PRESERVE qc_comment — do NOT null it. The supervisor's per-item correction
+    // note must survive resubmit so the supervisor can see what they previously
+    // asked for when reviewing the corrected inspection.
+    // Instead, mark items that HAD a qc_comment with qc_addressed_at (timestamp)
+    // so the supervisor knows the inspector claims to have addressed it.
+    const submittedItems = items.map(i =>
+      i.qc_comment
+        ? { ...i, qc_addressed_at: new Date().toISOString() }
+        : i
+    );
+    const pct = calcScore(submittedItems);
     const alertLevel = pct < 60 ? "critical" : pct < 75 ? "warning" : "ok";
     const payload = {
       ...inspection,
-      items: clearedItems,
+      items: submittedItems,
       sections,
       notes,
       status: "submitted",
