@@ -665,11 +665,13 @@ export default function Messages({ users, currentUser }) {
               display: "flex", 
               gap: 8,
               background: "#fff",
-              alignItems: "flex-end"
+              alignItems: "flex-end",
+              position: "sticky",
+              bottom: 0,
+              zIndex: 10
             }}>
               <textarea 
                 ref={textareaRef}
-                className="form-input" 
                 placeholder={`Escrever mensagem para ${activeChat.name}...`} 
                 value={text} 
                 onChange={e => setText(e.target.value)} 
@@ -677,24 +679,30 @@ export default function Messages({ users, currentUser }) {
                 style={{ 
                   flex: 1, 
                   resize: "vertical",
-                  minHeight: 40,
-                  maxHeight: 120,
-                  padding: "10px 12px",
-                  border: "1px solid #D1D5DB",
-                  borderRadius: 8,
-                  fontSize: 13,
+                  minHeight: 60,
+                  maxHeight: 200,
+                  padding: "12px 14px",
+                  border: "2px solid #D1D5DB",
+                  borderRadius: 10,
+                  fontSize: 16, /* 16px prevents iOS zoom on focus */
+                  lineHeight: 1.5,
                   outline: "none",
-                  fontFamily: "inherit"
+                  fontFamily: "inherit",
+                  width: "100%",
+                  boxSizing: "border-box",
+                  WebkitAppearance: "none",
                 }}
-                rows={1}
+                rows={2}
+                autoCapitalize="sentences"
+                autoComplete="off"
               />
               <button 
                 className="btn btn-primary" 
                 onClick={handleSend}
                 disabled={!text.trim()}
                 style={{
-                  padding: "10px 20px",
-                  height: 40,
+                  padding: "12px 20px",
+                  minHeight: 48,
                   display: "flex",
                   alignItems: "center",
                   gap: 6,

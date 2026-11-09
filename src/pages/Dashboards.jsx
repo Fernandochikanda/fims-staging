@@ -407,7 +407,6 @@ export function InspectorDashboard({ inspections, users, currentUser, onStartIns
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn btn-secondary" onClick={handleDownloadPDF}><Icon name="download" size={14} /> Daily PDF</button>
-          <button className="btn btn-secondary" onClick={() => onRequestLeave(currentUser)}><Icon name="clipboard" size={14} /> Pedir Folga</button>
         </div>
       </div>
 

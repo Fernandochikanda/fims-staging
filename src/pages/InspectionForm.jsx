@@ -2,7 +2,7 @@
 // Substituir o componente inteiro
 import { useState, useEffect, useRef } from "react";
 import { Icon } from "../lib/icons";
-import { calcScore, isItemComplete, getCategoryHealth, generateAISummary } from "../lib/helpers";
+import { calcScore, isItemComplete, getCategoryHealth } from "../lib/helpers";
 import { validateInspectionSubmission } from "../lib/inspectionValidator";
 import { photoStore } from "../lib/photoStore";
 import { getClientTemplate, getClientTemplateAsync } from "../data/constants";
@@ -22,7 +22,6 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
   const [saved, setSaved] = useState(false);
   const [photosByItem, setPhotosByItem] = useState({});
   const [validationErrors, setValidationErrors] = useState(null);
-  const [showAIPanel, setShowAIPanel] = useState(false);
   const [isLoadingTemplate, setIsLoadingTemplate] = useState(false);
   const [templateSource, setTemplateSource] = useState("");
   const [clientMgrName, setClientMgrName] = useState("");
@@ -445,8 +444,6 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
     setExpandedSections(prev => prev.includes(secId) ? prev.filter(id => id !== secId) : [...prev, secId]);
   };
 
-  const aiSummary = generateAISummary(items, inspection.location_name);
-
   // Estado de carregamento
   if (isLoadingTemplate) {
     return (
@@ -529,7 +526,6 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
             <div style={{ fontSize: 11, color: "#888" }}>Progress</div>
             <div style={{ fontSize: 14, fontWeight: 500 }}>{totalComplete}/{totalItems}</div>
           </div>
-          <button className="btn btn-secondary btn-sm" onClick={() => setShowAIPanel(true)}><Icon name="star" size={13} /> AI Review</button>
         </div>
       </div>
 
@@ -616,28 +612,6 @@ export default function InspectionForm({ inspection, onSave, onSubmit, onBack, a
       )}
 
       {/* AI Panel */}
-      {showAIPanel && (
-        <div className="modal-overlay" onClick={() => setShowAIPanel(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 500 }}>
-            <div className="modal-header"><div style={{ fontSize: 15, fontWeight: 500 }}>🤖 AI Inspection Assistant</div><button className="icon-btn" onClick={() => setShowAIPanel(false)}><Icon name="x" size={14} /></button></div>
-            <div className="modal-body">
-              <div style={{ background: "#E6F1FB", padding: 12, borderRadius: 8, marginBottom: 16 }}>
-                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Executive Summary</div>
-                <div style={{ fontSize: 12, color: "#444" }}>{aiSummary.summary}</div>
-              </div>
-              {aiSummary.recommendations && aiSummary.recommendations.length > 0 && (
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Recommended Corrective Actions:</div>
-                  {aiSummary.recommendations.map((rec, i) => (
-                    <div key={i} style={{ fontSize: 12, color: "#444", marginBottom: 8, padding: 8, background: "#F8F7F4", borderRadius: 6 }} dangerouslySetInnerHTML={{ __html: rec.replace(/\*\*(.*?)\*\*/, '<strong>$1</strong>') }} />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Collapsible Categories */}
       <div style={{ marginBottom: 16 }}>
         {sections.map(section => {
