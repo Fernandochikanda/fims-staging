@@ -5,7 +5,7 @@
 //
 // Import from here — never hardcode status strings elsewhere.
 
-import { ROLES } from "../data/constants";
+import { ROLES } from "../data/constants.js";
 
 // ─── STATUS ENUM ───────────────────────────────────────────────
 export const INSPECTION_STATUS = Object.freeze({
@@ -176,8 +176,17 @@ export function validateTransition(inspection, newStatus, currentUser) {
           message: "Não pode aprovar a sua própria inspeção. Peça a outro supervisor para rever.",
         };
       }
-      // Can only review if currently submitted or already needs_corrections
-      if (currentStatus !== INSPECTION_STATUS.SUBMITTED && currentStatus !== INSPECTION_STATUS.NEEDS_CORRECTIONS) {
+      // Can only review if currently submitted, needs_corrections, or closed (admin reopen)
+      if (currentStatus === INSPECTION_STATUS.CLOSED) {
+        // Reopening a closed inspection requires admin
+        if (role !== ROLES.ADMIN) {
+          return {
+            ok: false,
+            code: "NOT_AUTHORIZED",
+            message: "Apenas administradores podem reabrir inspeções fechadas.",
+          };
+        }
+      } else if (currentStatus !== INSPECTION_STATUS.SUBMITTED && currentStatus !== INSPECTION_STATUS.NEEDS_CORRECTIONS) {
         return {
           ok: false,
           code: "NOT_SUBMITTED",
